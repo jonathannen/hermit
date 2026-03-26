@@ -363,6 +363,17 @@ fn cross_block_const_cannot_be_redefined() {
 }
 
 #[test]
+fn null_bytes_in_input() {
+    let mut c = Hermit::spawn();
+    c.eval("console.log(\"a\\x00b\")");
+    // Should handle null bytes without crashing
+    c.eval(r#"console.log("still alive")"#);
+    assert_eq!(c.read_line(), "a\x00b");
+    assert_eq!(c.read_line(), "still alive");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
 fn invalid_js_does_not_crash() {
     let mut c = Hermit::spawn();
     c.eval(r#"{{{"#);
