@@ -312,6 +312,21 @@ fn this_cannot_reach_unfrozen_scope() {
 }
 
 #[test]
+fn string_bomb_is_contained() {
+    let mut c = Hermit::spawn_with_args(&["--memory-limit", "16mb"]);
+    c.eval(
+        r#"
+        let s = "a";
+        try { while(true) s += s; } catch(e) {}
+        console.log("survived");
+    "#,
+    );
+    // V8 throws RangeError on string length before hitting heap limit
+    assert_eq!(c.read_line(), "survived");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
 fn invalid_js_does_not_crash() {
     let mut c = Hermit::spawn();
     c.eval(r#"{{{"#);
