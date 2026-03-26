@@ -242,6 +242,14 @@ fn proto_manipulation_blocked() {
 }
 
 #[test]
+fn dynamic_import_blocked() {
+    let mut c = Hermit::spawn();
+    c.eval(r#"import("fs").then(() => console.log("bad")).catch(() => console.log("blocked"))"#);
+    assert_eq!(c.read_line(), "blocked");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
 fn invalid_js_does_not_crash() {
     let mut c = Hermit::spawn();
     c.eval(r#"{{{"#);
