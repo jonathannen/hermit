@@ -191,9 +191,11 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_arch = "aarch64")]
     allow(&mut rules, 172); // getresgid on aarch64
 
-    // Nanosleep (V8 GC thread sync on x86_64, glibc maps nanosleep to clock_nanosleep)
-    #[cfg(target_arch = "x86_64")]
+    // Nanosleep (V8 GC thread sync)
     allow(&mut rules, libc::SYS_clock_nanosleep);
+
+    // prctl is needed at runtime (e.g. PR_SET_NAME for thread naming by tokio/V8)
+    allow(&mut rules, libc::SYS_prctl);
 
     // Poll/epoll for tokio
     allow(&mut rules, libc::SYS_epoll_create1);
