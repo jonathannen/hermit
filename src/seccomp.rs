@@ -132,10 +132,7 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
     allow(&mut rules, libc::SYS_fstat); // V8 needs fstat on internal fds
     allow(&mut rules, libc::SYS_close);
     allow_safe_fcntl(&mut rules);
-    #[cfg(target_arch = "aarch64")]
-    allow(&mut rules, libc::SYS_openat); // aarch64 needs openat for V8 internals
-    #[cfg(target_arch = "x86_64")]
-    allow_openat_readonly(&mut rules); // x86_64: restrict openat to read-only
+    allow_openat_readonly(&mut rules); // openat restricted to read-only
 
     // Memory management (V8 JIT requires these)
     allow(&mut rules, libc::SYS_mmap);
@@ -212,7 +209,7 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
     // - SYS_clock_gettime: Date/timing
     // - SYS_gettimeofday: Date/timing
     // - SYS_socket, SYS_connect, etc: networking
-    // - SYS_open: filesystem (openat is allowed read-only on x86_64, unrestricted on aarch64)
+    // - SYS_open: filesystem (openat is allowed read-only)
     // - SYS_execve: no exec
     // - SYS_fork: no forking (clone/clone3 allowed for threads only)
     // - SYS_ptrace: no debugging/inspection
@@ -418,7 +415,6 @@ fn allow_safe_ioctl(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
 
 /// Allow openat only for read-only opens (block write, create, truncate, append)
 #[cfg(target_os = "linux")]
-#[cfg(target_arch = "x86_64")]
 fn allow_openat_readonly(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
     // openat(dirfd, pathname, flags, mode) - flags is arg index 2
     // Block any open that could write or create files:
