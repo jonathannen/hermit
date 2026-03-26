@@ -374,6 +374,16 @@ fn null_bytes_in_input() {
 }
 
 #[test]
+fn very_long_line() {
+    let mut c = Hermit::spawn();
+    // Send a 1MB string literal
+    let long_str = "a".repeat(1_000_000);
+    c.eval(&format!(r#"console.log("{}".length)"#, long_str));
+    assert_eq!(c.read_line(), "1000000");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
 fn invalid_js_does_not_crash() {
     let mut c = Hermit::spawn();
     c.eval(r#"{{{"#);
