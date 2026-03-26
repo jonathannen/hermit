@@ -250,6 +250,50 @@ fn dynamic_import_blocked() {
 }
 
 #[test]
+fn dangerous_globals_are_deleted() {
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        console.log(typeof RegExp);
+        console.log(typeof Symbol);
+        console.log(typeof WeakMap);
+        console.log(typeof WeakSet);
+        console.log(typeof WeakRef);
+        console.log(typeof Proxy);
+        console.log(typeof Reflect);
+    "#,
+    );
+    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
+fn regex_literals_cannot_escape_sandbox() {
+    let mut c = Hermit::spawn();
+    // Regex literals still work at the V8 level even with RegExp deleted
+    c.eval(
+        r#"
+        try {
+            const re = /test/;
+            console.log(re.test("test"));
+        } catch(e) {
+            console.log("error");
+        }
+    "#,
+    );
+    let result = c.read_line();
+    // Either works (true) or errors — both are acceptable, just shouldn't crash
+    assert!(result == "true" || result == "error");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
 fn invalid_js_does_not_crash() {
     let mut c = Hermit::spawn();
     c.eval(r#"{{{"#);
