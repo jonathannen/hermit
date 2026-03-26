@@ -226,6 +226,22 @@ fn prototypes_are_frozen() {
 }
 
 #[test]
+fn proto_manipulation_blocked() {
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        try { ({}).__proto__.polluted = true; } catch(e) {}
+        try { Object.defineProperty(Object.prototype, "x", { value: 1 }); } catch(e) {}
+        console.log(typeof ({}).polluted);
+        console.log(typeof ({}).x);
+    "#,
+    );
+    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
 fn invalid_js_does_not_crash() {
     let mut c = Hermit::spawn();
     c.eval(r#"{{{"#);
