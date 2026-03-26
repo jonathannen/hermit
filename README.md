@@ -59,4 +59,3 @@ cargo test
 ## Giants
 
 Hermit stands on the shoulders of giants — specifically [Deno](https://github.com/denoland/deno) and [Google V8](https://v8.dev/).
-# hermit

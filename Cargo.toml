@@ -1,0 +1,22 @@
+[package]
+name = "hermit"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[[bin]]
+name = "hermit"
+path = "src/main.rs"
+
+[dependencies]
+deno_core = "0.394"
+deno_error = "0.7"
+tokio = { version = "1", features = ["rt", "sync", "signal", "macros"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+seccompiler = "0.5"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
