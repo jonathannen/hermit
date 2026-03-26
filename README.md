@@ -21,7 +21,7 @@ See `tests/fixtures` for other examples.
 
 ## Security Layers
 
-- **[V8 Isolate](https://v8.dev/docs/embed#isolates)** — each execution runs in its own V8 isolate, the same process-level sandbox that Chrome uses to separate tabs.
+- **[V8 Isolate](https://v8.dev/docs/embed#isolates)** — each instance of hermit runs it's own V8 isolate, the same process-level sandbox that Chrome uses to separate tabs.
 - **[Seccomp](https://man7.org/linux/man-pages/man2/seccomp.2.html)** (Linux) — a syscall filter that restricts what the process can do at the kernel level, even if the V8 sandbox is escaped.
 - **Frozen globals** — the JavaScript environment is stripped down to a minimal set of builtins (`Array`, `Object`, `Promise`, `JSON`, etc.) with no `Date`, `Math`, `Proxy`, `eval`, typed arrays, or access to `Deno`/`Node` APIs. All prototypes and `globalThis` are frozen.
 
@@ -56,7 +56,6 @@ cargo test
 
 ## Remaining Tasks
 
-- ~~**x86**: The Seccomp rules are currently Linux/ARM only.~~ Done. Seccomp rules now cover both x86_64 and aarch64. On x86_64, openat is restricted to read-only opens.
 - **macOS**: Seccomp only applies on Linux. It would be great to find a similar set of entitlements for macOS.
 - **Pooling**: Unclear whether pooling isolates should be Hermit's job or its host's.
 - **Hardening**: If you'd like to further battle-test this, contributions are very welcome.

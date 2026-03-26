@@ -178,10 +178,8 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_arch = "aarch64")]
     allow(&mut rules, libc::SYS_sched_setaffinity);
     allow(&mut rules, libc::SYS_sched_yield);
-    #[cfg(target_arch = "x86_64")]
-    allow(&mut rules, libc::SYS_sched_getparam); // x86_64 V8 thread scheduling
-    #[cfg(target_arch = "x86_64")]
-    allow(&mut rules, libc::SYS_sched_getscheduler); // x86_64 V8 thread scheduling
+    allow(&mut rules, libc::SYS_sched_getparam); // V8 thread scheduling
+    allow(&mut rules, libc::SYS_sched_getscheduler); // V8 thread scheduling
 
     // Misc
     #[cfg(target_arch = "x86_64")]
