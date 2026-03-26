@@ -55,6 +55,7 @@ fn print_usage() {
     eprintln!("Options:");
     eprintln!("  --jit                  Enable JIT compilation (default: jitless)");
     eprintln!("  --memory-limit <size>  Set V8 heap limit (default: 128MB)");
+    eprintln!("                         Limits heap only, not stack.");
     eprintln!("                         Examples: 64mb, 256m, 1gb, 512kb");
     eprintln!("  --version, -V          Print version");
 }

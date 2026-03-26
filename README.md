@@ -33,7 +33,7 @@ Whilst that's pretty damn good, it's the start. To use this I'd recommend a defe
 
 - **Keep deno_core and V8 up-to-date.** This means updating the crates and making sure they track the latest V8 version. Easily the most important thing you can do.
 - **Design your protocol carefully.** Exposing something like the current time may create opportunities for timing attacks. Consider short-lived tokens and other mechanisms where callouts are required.
-- **Limit resources.** Use the `--memory-limit` flag for RAM. For CPU, your host needs to manage that (e.g. execution time, open handles).
+- **Limit resources.** Use the `--memory-limit` flag for the heap. For memory in general and the CPU, your host needs to manage that (e.g. execution time, open handles).
 - **Consider containerization.** With Seccomp the need is debatable, but it doesn't hurt. [Bubblewrap](https://github.com/containers/bubblewrap) is worth considering.
 - **Static analysis.** Analyse code before it goes in. It's not perfect, but you can catch a lot early. You can also put tripwires in the globals.
 - **Nuke bad actors.** Halt and quarantine any code that behaves badly — large allocations, infinite loops, etc.
