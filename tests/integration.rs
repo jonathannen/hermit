@@ -207,6 +207,25 @@ fn run_basic_fixture() {
 }
 
 #[test]
+fn prototypes_are_frozen() {
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        try { Array.prototype.evil = 1; } catch(e) {}
+        try { Object.prototype.evil = 1; } catch(e) {}
+        try { String.prototype.evil = 1; } catch(e) {}
+        console.log(typeof [].evil);
+        console.log(typeof ({}).evil);
+        console.log(typeof "".evil);
+    "#,
+    );
+    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
 fn invalid_js_does_not_crash() {
     let mut c = Hermit::spawn();
     c.eval(r#"{{{"#);
