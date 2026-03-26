@@ -8,7 +8,7 @@ The code in the isolate can call `console.log` and that's it. No file system, no
 
 Hermit provides the primitive isolate. It's expected that you'd build a host and protocol on top for doing real work.
 
-Async handlers and work is completely possible. See `tests/fixtures/async_bridge.js` as a starting point.
+The typical pattern is to send JavaScript wrapped in a protocol handler, then invoke this handler with later evals. The handler can interact with the host via console.log output — the protocol on how they communicate is up to you. Async handlers and interactions can be supported. See `tests/fixtures/async_bridge.js` as a starting point.
 
 ## Example
 
@@ -21,15 +21,17 @@ See `tests/fixtures` for other examples.
 
 ## Security Layers
 
-- **[V8 Isolate](https://v8.dev/docs/embed#isolates)** — each instance of hermit runs it's own V8 isolate, the same process-level sandbox that Chrome uses to separate tabs.
-- **[Seccomp](https://man7.org/linux/man-pages/man2/seccomp.2.html)** (Linux) — a syscall filter that restricts what the process can do at the kernel level, even if the V8 sandbox is escaped.
+- **[V8 Isolate](https://v8.dev/docs/embed#isolates)** — each instance of Hermit runs its own V8 isolate, the same process-level sandbox that Chrome uses to separate tabs.
+- **[Seccomp](https://man7.org/linux/man-pages/man2/seccomp.2.html)** (Linux only) — a syscall filter that restricts what the process can do at the kernel level, even if the V8 sandbox is escaped.
 - **Frozen globals** — the JavaScript environment is stripped down to a minimal set of builtins (`Array`, `Object`, `Promise`, `JSON`, etc.) with no `Date`, `Math`, `Proxy`, `eval`, typed arrays, or access to `Deno`/`Node` APIs. All prototypes and `globalThis` are frozen.
+
+Note: Seccomp is naturally Linux only. There is a Mac build for local development only.
 
 ## Security Considerations
 
 No sandbox is perfect, but escaping the V8 sandbox alone is worth [tens to hundreds of thousands in bounties from Google](https://bughunters.google.com/about/rules/chrome-friends/chrome-vulnerability-reward-program-rules). The Seccomp rules greatly limit the envelope even if that escape occurs. The reduced and frozen globals are the cherry on top.
 
-Whilst that's pretty damn good, it's the start. To use this I'd recommend a defence-in-depth approach. This includes at least:
+Whilst that's pretty good, it's the start. To use this I'd recommend a defence-in-depth approach including at least:
 
 - **Keep deno_core and V8 up-to-date.** This means updating the crates and making sure they track the latest V8 version. Easily the most important thing you can do.
 - **Design your protocol carefully.** Exposing something like the current time may create opportunities for timing attacks. Consider short-lived tokens and other mechanisms where callouts are required.
@@ -58,7 +60,7 @@ cargo test
 
 - **macOS**: Seccomp only applies on Linux. It would be great to find a similar set of entitlements for macOS.
 - **Pooling**: Unclear whether pooling isolates should be Hermit's job or its host's.
-- **Hardening**: If you'd like to further battle-test this, contributions are very welcome.
+- **Hardening**: Contributions are very welcome, especially on seccomp rules.
 
 ## Giants
 
