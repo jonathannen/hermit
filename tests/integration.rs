@@ -327,6 +327,21 @@ fn string_bomb_is_contained() {
 }
 
 #[test]
+fn microtask_flood_is_contained() {
+    let mut c = Hermit::spawn_with_args(&["--memory-limit", "16mb"]);
+    c.eval(
+        r#"
+        const f = () => Promise.resolve().then(f);
+        f();
+    "#,
+    );
+    // Should eventually OOM or error, not hang forever
+    // (microtask queue grows unboundedly, hitting heap limit)
+    let code = c.shutdown();
+    assert!(code == 137 || code == 0);
+}
+
+#[test]
 fn invalid_js_does_not_crash() {
     let mut c = Hermit::spawn();
     c.eval(r#"{{{"#);
