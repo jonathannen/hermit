@@ -294,6 +294,24 @@ fn regex_literals_cannot_escape_sandbox() {
 }
 
 #[test]
+fn this_cannot_reach_unfrozen_scope() {
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        // sloppy-mode function this
+        try { (function() { this.leaked = 1; })(); } catch(e) {}
+        // constructor this
+        try { const o = new (function() { this.x = 1; })(); } catch(e) {}
+        console.log(typeof leaked);
+        console.log(typeof globalThis.leaked);
+    "#,
+    );
+    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
 fn invalid_js_does_not_crash() {
     let mut c = Hermit::spawn();
     c.eval(r#"{{{"#);
