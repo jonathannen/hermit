@@ -384,6 +384,18 @@ fn very_long_line() {
 }
 
 #[test]
+fn empty_blocks() {
+    let mut c = Hermit::spawn();
+    // Send several empty blocks (just blank lines)
+    c.eval("");
+    c.eval("");
+    c.eval("");
+    c.eval(r#"console.log("alive")"#);
+    assert_eq!(c.read_line(), "alive");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
 fn invalid_js_does_not_crash() {
     let mut c = Hermit::spawn();
     c.eval(r#"{{{"#);
