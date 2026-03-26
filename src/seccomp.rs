@@ -167,10 +167,9 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
     // Thread stuff (V8 may use)
     #[cfg(target_arch = "x86_64")]
     allow_clone_thread_only(&mut rules); // clone restricted: namespace flags blocked
-    #[cfg(target_arch = "x86_64")]
-    allow(&mut rules, libc::SYS_clone3); // glibc prefers clone3; seccomp can't inspect struct-based flags
+    allow(&mut rules, libc::SYS_clone3); // newer glibc prefers clone3 for thread creation
     #[cfg(target_arch = "aarch64")]
-    allow(&mut rules, libc::SYS_clone);
+    allow(&mut rules, libc::SYS_clone); // older aarch64 glibc falls back to clone
     allow(&mut rules, libc::SYS_set_tid_address);
     allow(&mut rules, libc::SYS_set_robust_list);
     allow(&mut rules, libc::SYS_rseq);

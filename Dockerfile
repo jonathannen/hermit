@@ -1,5 +1,5 @@
 # Build stage
-FROM rust:1.91.1-slim-bookworm AS builder
+FROM rust:1.91.1-slim-trixie AS builder
 
 WORKDIR /build
 
@@ -24,7 +24,7 @@ COPY src ./src
 RUN cargo build --release
 
 # Runtime stage
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 # Install runtime dependencies (minimal)
 RUN apt-get update && apt-get install -y --no-install-recommends \
