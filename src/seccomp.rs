@@ -93,7 +93,7 @@ fn install_sigsys_handler() {
     unsafe {
         let mut sa: libc::sigaction = std::mem::zeroed();
         sa.sa_flags = libc::SA_SIGINFO;
-        sa.sa_sigaction = sigsys_handler as usize;
+        sa.sa_sigaction = sigsys_handler as *const () as usize;
         libc::sigemptyset(&mut sa.sa_mask);
         libc::sigaction(libc::SIGSYS, &sa, std::ptr::null_mut());
     }
@@ -102,7 +102,7 @@ fn install_sigsys_handler() {
 /// Install seccomp filter. Call this AFTER deno_core is initialized
 /// (V8 needs to do its initial mmap/mprotect dance first).
 #[cfg(target_os = "linux")]
-pub fn install() -> Result<(), Box<dyn std::error::Error>> {
+pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
     // Install SIGSYS handler to report blocked syscalls
     install_sigsys_handler();
 
@@ -131,24 +131,31 @@ pub fn install() -> Result<(), Box<dyn std::error::Error>> {
     allow_safe_ioctl(&mut rules); // ioctl restricted to safe terminal ops
     allow(&mut rules, libc::SYS_fstat); // V8 needs fstat on internal fds
     allow(&mut rules, libc::SYS_close);
-    allow(&mut rules, libc::SYS_fcntl);
+    allow_safe_fcntl(&mut rules);
     #[cfg(target_arch = "aarch64")]
     allow(&mut rules, libc::SYS_openat); // aarch64 needs openat for V8 internals
+    #[cfg(target_arch = "x86_64")]
+    allow_openat_readonly(&mut rules); // x86_64: restrict openat to read-only
 
     // Memory management (V8 JIT requires these)
-    // We could consider turning off JIT
     allow(&mut rules, libc::SYS_mmap);
     allow(&mut rules, libc::SYS_munmap);
-    allow(&mut rules, libc::SYS_mprotect);
+    if allow_jit {
+        allow(&mut rules, libc::SYS_mprotect);
+    } else {
+        // In jitless mode, block mprotect with PROT_EXEC — no reason to make pages
+        // executable after init. This prevents shellcode injection post-V8-escape.
+        allow_mprotect_noexec(&mut rules);
+    }
     allow(&mut rules, libc::SYS_mremap);
     allow(&mut rules, libc::SYS_brk);
-    allow(&mut rules, libc::SYS_madvise);
+    allow_safe_madvise(&mut rules);
 
     // Futex (V8 internal locking - unfortunately required)
     allow(&mut rules, libc::SYS_futex);
 
     // Signals
-    allow(&mut rules, libc::SYS_rt_sigaction);
+    allow_sigaction_protect_sigsys(&mut rules); // block overriding our SIGSYS handler
     allow(&mut rules, libc::SYS_rt_sigprocmask);
     allow(&mut rules, libc::SYS_rt_sigreturn);
     allow(&mut rules, libc::SYS_sigaltstack);
@@ -158,8 +165,12 @@ pub fn install() -> Result<(), Box<dyn std::error::Error>> {
     allow(&mut rules, libc::SYS_exit_group);
 
     // Thread stuff (V8 may use)
+    #[cfg(target_arch = "x86_64")]
+    allow_clone_thread_only(&mut rules); // clone restricted: namespace flags blocked
+    #[cfg(target_arch = "x86_64")]
+    allow(&mut rules, libc::SYS_clone3); // glibc prefers clone3; seccomp can't inspect struct-based flags
+    #[cfg(target_arch = "aarch64")]
     allow(&mut rules, libc::SYS_clone);
-    // allow_clone_thread_only(&mut rules); // TODO: re-enable clone flag restrictions
     allow(&mut rules, libc::SYS_set_tid_address);
     allow(&mut rules, libc::SYS_set_robust_list);
     allow(&mut rules, libc::SYS_rseq);
@@ -167,15 +178,25 @@ pub fn install() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_arch = "aarch64")]
     allow(&mut rules, libc::SYS_sched_setaffinity);
     allow(&mut rules, libc::SYS_sched_yield);
+    #[cfg(target_arch = "x86_64")]
+    allow(&mut rules, libc::SYS_sched_getparam); // x86_64 V8 thread scheduling
+    #[cfg(target_arch = "x86_64")]
+    allow(&mut rules, libc::SYS_sched_getscheduler); // x86_64 V8 thread scheduling
 
-    // Misc - getpid omitted (info leak, V8 caches at init)
+    // Misc
+    #[cfg(target_arch = "x86_64")]
+    allow(&mut rules, libc::SYS_getpid); // x86_64 tokio signal handling needs getpid
     allow(&mut rules, libc::SYS_gettid); // V8 needs for thread-local ops
     #[cfg(target_arch = "x86_64")]
     allow(&mut rules, libc::SYS_arch_prctl); // x86_64 TLS setup
-    allow(&mut rules, libc::SYS_prlimit64); // V8 checks resource limits
+    allow_prlimit64_readonly(&mut rules); // V8 checks resource limits (read-only)
     allow(&mut rules, libc::SYS_getrandom); // V8/tokio needs for initialization
     #[cfg(target_arch = "aarch64")]
     allow(&mut rules, 172); // getresgid on aarch64
+
+    // Nanosleep (V8 GC thread sync on x86_64, glibc maps nanosleep to clock_nanosleep)
+    #[cfg(target_arch = "x86_64")]
+    allow(&mut rules, libc::SYS_clock_nanosleep);
 
     // Poll/epoll for tokio
     allow(&mut rules, libc::SYS_epoll_create1);
@@ -192,9 +213,10 @@ pub fn install() -> Result<(), Box<dyn std::error::Error>> {
     // - SYS_clock_gettime: Date/timing
     // - SYS_gettimeofday: Date/timing
     // - SYS_socket, SYS_connect, etc: networking
-    // - SYS_open, SYS_openat: filesystem
+    // - SYS_open: filesystem (openat is allowed read-only on x86_64, unrestricted on aarch64)
     // - SYS_execve: no exec
-    // - SYS_fork: no forking (clone is allowed for threads only)
+    // - SYS_fork: no forking (clone/clone3 allowed for threads only)
+    // - SYS_ptrace: no debugging/inspection
 
     let filter = SeccompFilter::new(
         rules,
@@ -213,6 +235,144 @@ pub fn install() -> Result<(), Box<dyn std::error::Error>> {
 fn allow(rules: &mut BTreeMap<i64, Vec<SeccompRule>>, syscall: i64) {
     // Empty rule = allow unconditionally
     rules.insert(syscall, vec![]);
+}
+
+/// Allow only safe madvise flags (block MADV_DONTDUMP, MADV_HUGEPAGE, etc.)
+#[cfg(target_os = "linux")]
+fn allow_safe_madvise(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
+    // madvise(addr, length, advice) - advice is arg2
+    //
+    // Safe flags we allow:
+    // - MADV_NORMAL (0) - reset to default
+    // - MADV_DONTNEED (4) - pages can be reclaimed (V8 GC uses this)
+    // - MADV_FREE (8) - lazy free (V8 GC may use this)
+    // - MADV_DONTFORK (10) - exclude from fork (V8 uses extensively)
+    //
+    // Dangerous flags we block:
+    // - MADV_DONTDUMP (16) - hide memory from core dumps/forensics
+    // - MADV_HUGEPAGE (14) - Rowhammer amplification
+    // - MADV_MERGEABLE (12) - KSM side-channel
+
+    const MADV_NORMAL: u64 = 0;
+    const MADV_DONTNEED: u64 = 4;
+    const MADV_FREE: u64 = 8;
+    const MADV_DONTFORK: u64 = 10;
+
+    let madvise_rules = vec![
+        SeccompRule::new(vec![SeccompCondition::new(2, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, MADV_NORMAL)
+            .expect("valid")])
+        .expect("valid"),
+        SeccompRule::new(vec![SeccompCondition::new(2, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, MADV_DONTNEED)
+            .expect("valid")])
+        .expect("valid"),
+        SeccompRule::new(vec![SeccompCondition::new(2, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, MADV_FREE)
+            .expect("valid")])
+        .expect("valid"),
+        SeccompRule::new(vec![SeccompCondition::new(2, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, MADV_DONTFORK)
+            .expect("valid")])
+        .expect("valid"),
+    ];
+
+    rules.insert(libc::SYS_madvise, madvise_rules);
+}
+
+/// Allow rt_sigaction but block overriding SIGSYS handler
+#[cfg(target_os = "linux")]
+fn allow_sigaction_protect_sigsys(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
+    // rt_sigaction(signum, act, oldact, sigsetsize) - signum is arg0
+    // Block signum == SIGSYS (31) to prevent a V8 escape from silently
+    // uninstalling our seccomp violation handler.
+    // We use Ne: allow any signal that is NOT SIGSYS.
+    const SIGSYS: u64 = 31;
+
+    let rule = SeccompRule::new(vec![SeccompCondition::new(
+        0, // signum argument
+        SeccompCmpArgLen::Dword,
+        SeccompCmpOp::Ne,
+        SIGSYS,
+    )
+    .expect("valid condition")])
+    .expect("valid rule");
+
+    rules.insert(libc::SYS_rt_sigaction, vec![rule]);
+}
+
+/// Allow prlimit64 only for reading limits (new_limit must be NULL)
+#[cfg(target_os = "linux")]
+fn allow_prlimit64_readonly(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
+    // prlimit64(pid, resource, new_limit, old_limit) - new_limit is arg2
+    // Allow only when new_limit == NULL (0), i.e. read-only queries.
+    // Block setting limits which could be used for DoS or side-channels.
+    let rule = SeccompRule::new(vec![SeccompCondition::new(
+        2, // new_limit argument
+        SeccompCmpArgLen::Qword,
+        SeccompCmpOp::Eq,
+        0, // must be NULL
+    )
+    .expect("valid condition")])
+    .expect("valid rule");
+
+    rules.insert(libc::SYS_prlimit64, vec![rule]);
+}
+
+/// Allow only safe fcntl operations (block F_SETOWN, F_SETSIG, etc.)
+#[cfg(target_os = "linux")]
+fn allow_safe_fcntl(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
+    // fcntl(fd, cmd, ...) - cmd is arg1
+    //
+    // Safe ops we allow:
+    // - F_GETFD (1) - get close-on-exec flag
+    // - F_SETFD (2) - set close-on-exec flag
+    // - F_GETFL (3) - get file status flags
+    // - F_DUPFD_CLOEXEC (1030) - dup with close-on-exec (V8/tokio uses this)
+    //
+    // Dangerous ops we block:
+    // - F_SETOWN (8) - redirect SIGIO/SIGURG to arbitrary pid
+    // - F_SETSIG (10) - change signal delivered on I/O events
+    // - F_SETFL (4) - could add O_APPEND to corrupt logs
+    // - F_SETLK/F_SETLKW (6,7) - file locking (not needed)
+
+    const F_GETFD: u64 = 1;
+    const F_SETFD: u64 = 2;
+    const F_GETFL: u64 = 3;
+    const F_DUPFD_CLOEXEC: u64 = 1030;
+
+    let fcntl_rules = vec![
+        SeccompRule::new(vec![SeccompCondition::new(1, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, F_GETFD)
+            .expect("valid")])
+        .expect("valid"),
+        SeccompRule::new(vec![SeccompCondition::new(1, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, F_SETFD)
+            .expect("valid")])
+        .expect("valid"),
+        SeccompRule::new(vec![SeccompCondition::new(1, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, F_GETFL)
+            .expect("valid")])
+        .expect("valid"),
+        SeccompRule::new(vec![SeccompCondition::new(1, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, F_DUPFD_CLOEXEC)
+            .expect("valid")])
+        .expect("valid"),
+    ];
+
+    rules.insert(libc::SYS_fcntl, fcntl_rules);
+}
+
+/// Block mprotect with PROT_EXEC (prevent making pages executable post-init)
+#[cfg(target_os = "linux")]
+fn allow_mprotect_noexec(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
+    // mprotect(addr, len, prot) - prot is arg2
+    // PROT_EXEC = 0x4. Block any call where PROT_EXEC is set.
+    // (prot & PROT_EXEC) == 0
+    const PROT_EXEC: u64 = 0x4;
+
+    let rule = SeccompRule::new(vec![SeccompCondition::new(
+        2, // prot argument
+        SeccompCmpArgLen::Dword,
+        SeccompCmpOp::MaskedEq(PROT_EXEC),
+        0, // PROT_EXEC must not be set
+    )
+    .expect("valid condition")])
+    .expect("valid rule");
+
+    rules.insert(libc::SYS_mprotect, vec![rule]);
 }
 
 /// Allow only safe ioctl operations (block TIOCSTI terminal injection, etc.)
@@ -257,17 +417,37 @@ fn allow_safe_ioctl(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
     rules.insert(libc::SYS_ioctl, ioctl_rules);
 }
 
+/// Allow openat only for read-only opens (block write, create, truncate, append)
+#[cfg(target_os = "linux")]
+#[cfg(target_arch = "x86_64")]
+fn allow_openat_readonly(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
+    // openat(dirfd, pathname, flags, mode) - flags is arg index 2
+    // Block any open that could write or create files:
+    // O_WRONLY (0x1), O_RDWR (0x2), O_CREAT (0x40), O_TRUNC (0x200), O_APPEND (0x400)
+    const DANGEROUS_FLAGS: u64 = 0x1 | 0x2 | 0x40 | 0x200 | 0x400;
+
+    // Allow only if (flags & DANGEROUS_FLAGS) == 0 (i.e. read-only)
+    let rule = SeccompRule::new(vec![SeccompCondition::new(
+        2, // flags argument
+        SeccompCmpArgLen::Dword,
+        SeccompCmpOp::MaskedEq(DANGEROUS_FLAGS),
+        0, // none of the dangerous flags set
+    )
+    .expect("valid condition")])
+    .expect("valid rule");
+
+    rules.insert(libc::SYS_openat, vec![rule]);
+}
+
 /// Allow clone only for thread creation (block namespace escapes like CLONE_NEWUSER)
 #[cfg(target_os = "linux")]
+#[cfg(target_arch = "x86_64")]
 fn allow_clone_thread_only(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
     // Block dangerous clone flags that could be used for container/sandbox escape:
     // - CLONE_NEWNS, CLONE_NEWUSER, CLONE_NEWPID, CLONE_NEWNET, etc.
     // We use masked_eq to check that none of the namespace flags are set.
     //
-    // clone(2) arg0 is flags on x86_64, but on aarch64 it's arg1 (args are swapped).
-    // However, clone3(2) uses a struct. We block clone3 entirely (not in allow list).
-    //
-    // Dangerous flags we must block:
+    // On x86_64, clone(2) flags are in arg0.
     const CLONE_NEWNS: u64 = 0x00020000;
     const CLONE_NEWCGROUP: u64 = 0x02000000;
     const CLONE_NEWUTS: u64 = 0x04000000;
@@ -275,22 +455,14 @@ fn allow_clone_thread_only(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
     const CLONE_NEWUSER: u64 = 0x10000000;
     const CLONE_NEWPID: u64 = 0x20000000;
     const CLONE_NEWNET: u64 = 0x40000000;
-    #[allow(dead_code)]
-    const CLONE_NEWTIME: u64 = 0x00000080;
 
     let dangerous_flags =
         CLONE_NEWNS | CLONE_NEWCGROUP | CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWNET;
 
-    // On x86_64, clone flags are in arg0
     // masked_eq(mask, val): (arg & mask) == val
     // We want: (flags & dangerous_flags) == 0
-    #[cfg(target_arch = "x86_64")]
-    let arg_index = 0;
-    #[cfg(target_arch = "aarch64")]
-    let arg_index = 0; // aarch64 also uses arg0 for flags in the clone wrapper glibc uses
-
     let rule = SeccompRule::new(vec![SeccompCondition::new(
-        arg_index,
+        0, // flags in arg0 on x86_64
         SeccompCmpArgLen::Qword,
         SeccompCmpOp::MaskedEq(dangerous_flags),
         0, // (flags & dangerous) must equal 0
@@ -303,7 +475,7 @@ fn allow_clone_thread_only(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
 
 /// No-op on non-Linux platforms
 #[cfg(not(target_os = "linux"))]
-pub fn install() -> Result<(), Box<dyn std::error::Error>> {
+pub fn install(_allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
     // Seccomp is Linux-only; on macOS we rely on JS lockdown only
     Ok(())
 }

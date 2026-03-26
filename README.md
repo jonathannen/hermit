@@ -56,7 +56,7 @@ cargo test
 
 ## Remaining Tasks
 
-- **x86**: The Seccomp rules are currently Linux/ARM only. Running in Docker on Mac/Rosetta is not sufficient — it needs an actual x86 CPU to be developed.
+- ~~**x86**: The Seccomp rules are currently Linux/ARM only.~~ Done. Seccomp rules now cover both x86_64 and aarch64. On x86_64, openat is restricted to read-only opens.
 - **macOS**: Seccomp only applies on Linux. It would be great to find a similar set of entitlements for macOS.
 - **Pooling**: Unclear whether pooling isolates should be Hermit's job or its host's.
 - **Hardening**: If you'd like to further battle-test this, contributions are very welcome.
