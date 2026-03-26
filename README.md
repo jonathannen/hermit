@@ -8,16 +8,28 @@ The code in the isolate can call `console.log` and that's it. No file system, no
 
 Hermit provides the primitive isolate. It's expected that you'd build a host and protocol on top for doing real work.
 
-The typical pattern is to send JavaScript wrapped in a protocol handler, then invoke this handler with later evals. The handler can interact with the host via console.log output — the protocol on how they communicate is up to you. Async handlers and interactions can be supported. See `tests/fixtures/async_bridge.js` as a starting point.
+The typical pattern is to send JavaScript wrapped in a protocol handler, then invoke this handler with later evals. The handler can interact with the host via console.log output — the protocol on how they communicate is up to you. See `examples/fetch` as an example.
+
+Async handlers and interactions can be supported. See `tests/fixtures/async_bridge.js` as a starting point.
 
 ## Example
 
+The most trivial example executes JavaScript directly.
+
 ```bash
-printf 'const add = (a, b) => a + b;\n\nconsole.log(add(1, 2));\n\n' | hermit
+printf 'console.log(1 + 2);\n\n' | hermit
 # 3
 ```
 
-See `tests/fixtures` for other examples.
+You can define functions in one block and call them in a later block. This is the basis of the handler pattern — send a protocol handler first (potentially wrapping untrusted code), then invoke it with subsequent evals.
+
+```bash
+# Define a handler, then call it in a separate block.
+printf 'const greet = (name) => console.log("hello " + name);\n\ngreet("world");\n\n' | hermit
+# hello world
+```
+
+See `examples` and `tests/fixtures` for other examples.
 
 ## Security Layers
 
