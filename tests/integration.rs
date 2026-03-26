@@ -342,6 +342,27 @@ fn microtask_flood_is_contained() {
 }
 
 #[test]
+fn cross_block_state_persists() {
+    let mut c = Hermit::spawn();
+    c.eval(r#"const greet = (name) => console.log("hi " + name);"#);
+    c.eval(r#"greet("world")"#);
+    assert_eq!(c.read_line(), "hi world");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
+fn cross_block_const_cannot_be_redefined() {
+    let mut c = Hermit::spawn();
+    c.eval(r#"const x = 1;"#);
+    // Redefining a const in a later block should error
+    c.eval(r#"const x = 2;"#);
+    // Process should survive the error
+    c.eval(r#"console.log("alive")"#);
+    assert_eq!(c.read_line(), "alive");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
 fn invalid_js_does_not_crash() {
     let mut c = Hermit::spawn();
     c.eval(r#"{{{"#);
