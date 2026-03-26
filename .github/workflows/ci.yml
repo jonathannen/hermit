@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: ${{ matrix.os-label }} / ${{ matrix.mode }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            os-label: macOS (ARM)
+            mode: jitless
+          - runner: macos-latest
+            os-label: macOS (ARM)
+            mode: jit
+            jit: "1"
+          - runner: ubuntu-24.04-arm
+            os-label: Linux ARM
+            mode: jitless
+          - runner: ubuntu-24.04-arm
+            os-label: Linux ARM
+            mode: jit
+            jit: "1"
+          - runner: ubuntu-latest
+            os-label: Linux x86_64
+            mode: jitless
+          - runner: ubuntu-latest
+            os-label: Linux x86_64
+            mode: jit
+            jit: "1"
+    env:
+      HERMIT_JIT: ${{ matrix.jit || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release
+      - name: Run tests (20 iterations)
+        run: |
+          for i in $(seq 1 20); do
+            echo "=== Run $i/20 ==="
+            cargo test --release
+          done
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: cargo clippy --all-targets -- -D warnings

@@ -41,6 +41,11 @@ Whilst that's pretty damn good, it's the start. To use this I'd recommend a defe
 
 If you want to use this in production, [reach out](https://jonathannen.com/about/).
 
+## Options
+
+- `--memory-limit <size>` — Set the V8 heap limit (default: 128MB). Limits heap only, not stack. Examples: `64mb`, `256m`, `1gb`.
+- `--jit` — Enable V8 JIT compilation. By default, Hermit runs in jitless mode, which disables the JIT compiler entirely. Jitless is slower but reduces attack surface.
+
 ## Build & Test
 
 ```bash
