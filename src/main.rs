@@ -147,7 +147,7 @@ async fn run(memory_limit: usize, allow_jit: bool) -> Result<(), AnyError> {
     let mut js_runtime = runtime::create_runtime(memory_limit, allow_jit)?;
 
     // Install seccomp filter (Linux only, no-op on macOS)
-    seccomp::install().map_err(|e| {
+    seccomp::install(allow_jit).map_err(|e| {
         deno_error::JsErrorBox::new("Error", format!("failed to install seccomp filter: {}", e))
     })?;
 
