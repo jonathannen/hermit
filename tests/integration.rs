@@ -478,6 +478,22 @@ fn function_constructor_blocked_via_builtins() {
 }
 
 #[test]
+fn malicious_tojson_and_tostring_contained() {
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        const bomb = { toString() { throw new Error("boom"); } };
+        try { console.log(bomb); } catch(e) {}
+        const recursive = { toString() { return console.log(recursive); } };
+        try { console.log(recursive); } catch(e) {}
+        console.log("survived");
+    "#,
+    );
+    assert_eq!(c.read_line(), "survived");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
 fn invalid_js_does_not_crash() {
     let mut c = Hermit::spawn();
     c.eval(r#"{{{"#);
