@@ -438,6 +438,23 @@ fn caller_chain_cannot_escape_sandbox() {
 }
 
 #[test]
+fn error_stack_does_not_leak_paths() {
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        const stack = new Error("test").stack;
+        // Stack should only reference <stdin>, not internal file paths
+        const hasInternalPaths = stack.includes("/") || stack.includes("\\");
+        console.log(hasInternalPaths);
+        console.log(stack.includes("<stdin>"));
+    "#,
+    );
+    assert_eq!(c.read_line(), "false");
+    assert_eq!(c.read_line(), "true");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
 fn invalid_js_does_not_crash() {
     let mut c = Hermit::spawn();
     c.eval(r#"{{{"#);
