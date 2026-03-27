@@ -455,6 +455,29 @@ fn error_stack_does_not_leak_paths() {
 }
 
 #[test]
+fn function_constructor_blocked_via_builtins() {
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        const paths = [
+            console.log.constructor,
+            [].map.constructor,
+            "".toString.constructor,
+            (()=>{}).constructor,
+        ];
+        let escaped = false;
+        for (const F of paths) {
+            try { new F("return 1"); escaped = true; } catch(e) {}
+            try { F("return 1"); escaped = true; } catch(e) {}
+        }
+        console.log(escaped);
+    "#,
+    );
+    assert_eq!(c.read_line(), "false");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
 fn invalid_js_does_not_crash() {
     let mut c = Hermit::spawn();
     c.eval(r#"{{{"#);
