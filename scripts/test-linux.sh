@@ -1,4 +1,7 @@
 #!/bin/bash
+
+# This is a convenience script for running ARM/Linux locally when developing
+# on Mac/etc. It uses docker with seccomp disabled.
 set -e
 
 IMAGE="hermit-test"

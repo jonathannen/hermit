@@ -2,7 +2,9 @@
 
 Hermit runs JavaScript in a cave. You can pass notes in and get notes back. That's it.
 
-More specifically, Hermit runs JavaScript inside V8 isolates, using stdio as the control protocol. Code is sent via stdin and eval'd in the isolate. Input is buffered line-by-line until a blank line is received, at which point the accumulated block is evaluated. At this point, the Hermit waits for all microtasks to complete. On EOF, any remaining buffered code is flushed and evaluated.
+More specifically, Hermit runs JavaScript inside V8 isolates, using stdio as the control protocol. Beyond stdio, the it's completely sandboxed.
+
+Code is sent via stdin and eval'd in the isolate. Input is buffered line-by-line until a blank line is received, at which point the accumulated block is evaluated. At this point, the Hermit waits for all microtasks to complete. On EOF, any remaining buffered code is flushed and evaluated.
 
 The code in the isolate can call `console.log` and that's it. No file system, no environment variables, no `require`, and extremely limited globals.
 
@@ -29,7 +31,7 @@ printf 'const greet = (name) => console.log("hello " + name);\n\ngreet("world");
 # hello world
 ```
 
-See `examples` and `tests/fixtures` for other examples. You can also substitute `hermit` for `cargo run` to build and run the code directly.
+See `examples` and `tests/fixtures` for other examples. You can also substitute `hermit` for `cargo run`.
 
 ## Security Layers
 
