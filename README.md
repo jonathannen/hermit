@@ -41,7 +41,7 @@ Note: Seccomp is naturally Linux only. There is a Mac build for local developmen
 
 ## Security Considerations
 
-No sandbox is perfect, but escaping the V8 sandbox alone is worth [tens to hundreds of thousands in bounties from Google](https://bughunters.google.com/about/rules/chrome-friends/chrome-vulnerability-reward-program-rules). The Seccomp rules greatly limit the envelope even if that escape occurs. The reduced and frozen globals are the cherry on top.
+No sandbox is perfect, but escaping the V8 sandbox alone is worth [tens to hundreds of thousands of dollars in bounties from Google](https://bughunters.google.com/about/rules/chrome-friends/chrome-vulnerability-reward-program-rules). The Seccomp rules greatly limit the envelope even if that escape occurs. The reduced and frozen globals are the cherry on top.
 
 Whilst that's pretty good, it's the start. To use this I'd recommend a defence-in-depth approach including at least:
 
@@ -57,7 +57,7 @@ If you want to use this in production, [reach out](https://jonathannen.com/about
 
 ## Options
 
-- `--memory-limit <size>` — Set the V8 heap limit (default: 128MB). Limits heap only, not stack. Examples: `64mb`, `256m`, `1gb`.
+- `--memory-limit <size>` — Set the V8 heap limit (default: 128MB). Limits heap only, not stack. If the heap limit is reached, the process exits with code 137. Examples: `64mb`, `256m`, `1gb`.
 - `--timeout <duration>` — Max wall-clock time per eval block (default: none). If an eval exceeds this, the process exits with code 142. Examples: `5s`, `500ms`, `30s`. This covers synchronous infinite loops and microtask floods. Async code that yields to the event loop between evals is unaffected — for session-level timeouts, the host should manage process lifetime.
 - `--jit` — Enable V8 JIT compilation. By default, Hermit runs in jitless mode, which disables the JIT compiler entirely. Jitless is slower but reduces attack surface.
 

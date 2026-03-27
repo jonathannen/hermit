@@ -125,7 +125,7 @@ fn print_usage() {
     eprintln!("Options:");
     eprintln!("  --jit                  Enable JIT compilation (default: jitless)");
     eprintln!("  --memory-limit <size>  Set V8 heap limit (default: 128MB)");
-    eprintln!("                         Limits heap only, not stack.");
+    eprintln!("                         Limits heap only, not stack (exit code 137).");
     eprintln!("                         Examples: 64mb, 256m, 1gb, 512kb");
     eprintln!("  --timeout <duration>   Max wall-clock time per eval block (default: none)");
     eprintln!("                         Kills process on timeout (exit code 142).");
