@@ -494,6 +494,22 @@ fn malicious_tojson_and_tostring_contained() {
 }
 
 #[test]
+fn intl_crypto_queuemicrotask_deleted() {
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        console.log(typeof Intl);
+        console.log(typeof crypto);
+        console.log(typeof queueMicrotask);
+    "#,
+    );
+    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
 fn invalid_js_does_not_crash() {
     let mut c = Hermit::spawn();
     c.eval(r#"{{{"#);
