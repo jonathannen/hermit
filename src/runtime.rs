@@ -10,6 +10,9 @@ pub const OOM_EXIT_CODE: i32 = 137;
 /// Exit code for timeout (128 + SIGALRM)
 pub const TIMEOUT_EXIT_CODE: i32 = 142;
 
+/// Exit code for stdout write failure (128 + SIGPIPE)
+pub const PIPE_EXIT_CODE: i32 = 141;
+
 extension!(
     hermit,
     ops = [op_log],
