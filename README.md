@@ -75,6 +75,22 @@ cargo test
 - **Pooling**: Unclear whether pooling isolates should be Hermit's job or its host's.
 - **Hardening**: Contributions are very welcome, especially on seccomp rules.
 
+## Alternatives
+
+There are several ways to sandbox JavaScript. Each makes different trade-offs between security, performance, API surface, and operational complexity.
+
+**[isolated-vm](https://github.com/nickmccurdy/isolated-vm)** — Node.js library that exposes V8 isolates as an in-process API. Fast (no process spawn), supports transferring values and references across the isolate boundary. But it runs inside your Node process — a V8 escape compromises the host. No syscall-level sandboxing. Best for trusted-ish code where performance matters more than isolation depth.
+
+**[Wasmer](https://wasmer.io/)** / **[Wasmtime](https://wasmtime.dev/)** — WebAssembly runtimes. Language-agnostic, strong sandboxing (capability-based, no ambient authority), and near-native performance. The trade-off is that JavaScript must first be compiled to Wasm (via QuickJS or similar), which adds complexity and limits JS features. No native Promises or event loop. Best when you need polyglot sandboxing or are already in a Wasm ecosystem.
+
+**[gVisor](https://gvisor.dev/)** / **[Firecracker](https://firecracker-microvm.github.io/)** — kernel-level or microVM sandboxing. Run anything (not just JS) with strong isolation. Heavy operationally — container images, VM boot times, memory overhead. Best when you need to sandbox arbitrary processes, not just JavaScript.
+
+**[QuickJS](https://bellard.org/quickjs/)** — small embeddable JS engine. Easy to sandbox (no JIT, tiny attack surface).
+
+**[Cloudflare Workers](https://workers.cloudflare.com/)** / **[Deno Deploy](https://deno.com/deploy)** — managed V8 isolate platforms. These are specific to those vendors. Cloudflare have the Open Source [workerd](https://github.com/cloudflare/workerd) based off Workers.
+
+**Hermit** sits in a specific niche: V8 performance and full JS semantics (including async/await), with the smallest possible API surface (just `console.log`), defence-in-depth sandboxing (V8 isolate + seccomp + frozen globals), and a dead-simple stdio protocol. It's a raw primitive — you build the protocol, the host, and the orchestration yourself.
+
 ## Giants
 
 Hermit stands on the shoulders of giants — specifically [Deno](https://github.com/denoland/deno) and [Google V8](https://v8.dev/).
