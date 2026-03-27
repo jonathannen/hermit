@@ -2,9 +2,7 @@
 
 Hermit runs JavaScript in a cave. You can pass notes in and get notes back. That's it.
 
-More specifically, Hermit runs JavaScript inside V8 isolates, using stdio as the control protocol. Beyond stdio, the it's completely sandboxed.
-
-Code is sent via stdin and eval'd in the isolate. Input is buffered line-by-line until a blank line is received, at which point the accumulated block is evaluated. At this point, the Hermit waits for all microtasks to complete. On EOF, any remaining buffered code is flushed and evaluated.
+More specifically, Hermit runs JavaScript inside V8 isolates, using stdio as the control protocol. Code is sent via stdin and eval'd in the isolate. Input is buffered line-by-line until a blank line is received, at which point the accumulated block is evaluated. At this point, the Hermit waits for all microtasks to complete. On EOF, any remaining buffered code is flushed and evaluated.
 
 The code in the isolate can call `console.log` and that's it. No file system, no environment variables, no `require`, and extremely limited globals.
 
@@ -87,7 +85,7 @@ There are several ways to sandbox JavaScript. Each makes different trade-offs be
 
 **[gVisor](https://gvisor.dev/)** / **[Firecracker](https://firecracker-microvm.github.io/)** — kernel-level or microVM sandboxing. Run anything (not just JS) with strong isolation. Heavy operationally — container images, VM boot times, memory overhead. Best when you need to sandbox arbitrary processes, not just JavaScript.
 
-**[QuickJS](https://bellard.org/quickjs/)** — small embeddable JS engine. Easy to sandbox (no JIT, tiny attack surface).
+**[QuickJS](https://bellard.org/quickjs/)** — small embeddable JS engine. Easy to sandbox (no JIT, tiny attack surface). Still in-process and not hardened generally (it's often used with WASM).
 
 **[Cloudflare Workers](https://workers.cloudflare.com/)** / **[Deno Deploy](https://deno.com/deploy)** — managed V8 isolate platforms. These are specific to those vendors. Cloudflare have the Open Source [workerd](https://github.com/cloudflare/workerd) based off Workers.
 
