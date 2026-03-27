@@ -510,6 +510,52 @@ fn intl_crypto_queuemicrotask_deleted() {
 }
 
 #[test]
+fn console_log_non_string_types() {
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        console.log(undefined);
+        console.log(null);
+        console.log(true);
+        console.log(12345);
+        console.log({a:1});
+        console.log([1,2,3]);
+        console.log(1, "two", null);
+    "#,
+    );
+    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.read_line(), "null");
+    assert_eq!(c.read_line(), "true");
+    assert_eq!(c.read_line(), "12345");
+    assert_eq!(c.read_line(), "[object Object]");
+    assert_eq!(c.read_line(), "1,2,3");
+    assert_eq!(c.read_line(), "1 two null");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
+fn console_log_no_args() {
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        console.log();
+        console.log("after");
+    "#,
+    );
+    assert_eq!(c.read_line(), "");
+    assert_eq!(c.read_line(), "after");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
+fn console_log_large_string() {
+    let mut c = Hermit::spawn();
+    c.eval(r#"const s = "x".repeat(1024 * 1024); console.log(s.length);"#);
+    assert_eq!(c.read_line(), "1048576");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
 fn invalid_js_does_not_crash() {
     let mut c = Hermit::spawn();
     c.eval(r#"{{{"#);
