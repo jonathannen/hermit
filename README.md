@@ -29,7 +29,7 @@ printf 'const greet = (name) => console.log("hello " + name);\n\ngreet("world");
 # hello world
 ```
 
-See `examples` and `tests/fixtures` for other examples.
+See `examples` and `tests/fixtures` for other examples. You can also substitute `hermit` for `cargo run` to build and run the code directly.
 
 ## Security Layers
 
