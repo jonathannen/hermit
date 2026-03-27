@@ -200,11 +200,14 @@ fn main() {
     }
 }
 
+const MAX_BLOCK_SIZE: usize = 64 * 1024 * 1024; // 64MB
+
 fn spawn_stdin_reader() -> mpsc::UnboundedReceiver<String> {
     let (tx, rx) = mpsc::unbounded_channel();
     std::thread::spawn(move || {
         let stdin = std::io::stdin();
         let mut buffer: Vec<String> = Vec::new();
+        let mut buffer_size: usize = 0;
         for line in stdin.lock().lines() {
             let line = match line {
                 Ok(l) => l,
@@ -214,11 +217,17 @@ fn spawn_stdin_reader() -> mpsc::UnboundedReceiver<String> {
                 if !buffer.is_empty() {
                     let code = buffer.join("\n");
                     buffer.clear();
+                    buffer_size = 0;
                     if tx.send(code).is_err() {
                         break;
                     }
                 }
             } else {
+                buffer_size += line.len() + 1; // +1 for newline
+                if buffer_size > MAX_BLOCK_SIZE {
+                    eprintln!("fatal: eval block exceeds {}MB limit", MAX_BLOCK_SIZE / (1024 * 1024));
+                    std::process::exit(1);
+                }
                 buffer.push(line);
             }
         }
