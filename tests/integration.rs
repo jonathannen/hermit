@@ -418,6 +418,26 @@ fn timeout_kills_microtask_flood() {
 }
 
 #[test]
+fn caller_chain_cannot_escape_sandbox() {
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        (function outer() {
+            (function inner() {
+                const caller = arguments.callee.caller;
+                // Can walk to caller, but cannot reach anything beyond user code
+                try { caller.constructor("return this")(); } catch(e) {}
+                console.log(typeof caller);
+            })();
+        })();
+    "#,
+    );
+    // caller is accessible but Function constructor is poisoned
+    assert_eq!(c.read_line(), "function");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
 fn invalid_js_does_not_crash() {
     let mut c = Hermit::spawn();
     c.eval(r#"{{{"#);
