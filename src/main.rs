@@ -286,3 +286,80 @@ async fn run(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_memory_limit_bytes() {
+        assert_eq!(parse_memory_limit("1024").unwrap(), 1024);
+        assert_eq!(parse_memory_limit("1024b").unwrap(), 1024);
+    }
+
+    #[test]
+    fn parse_memory_limit_kilobytes() {
+        assert_eq!(parse_memory_limit("64kb").unwrap(), 64 * 1024);
+        assert_eq!(parse_memory_limit("64k").unwrap(), 64 * 1024);
+    }
+
+    #[test]
+    fn parse_memory_limit_megabytes() {
+        assert_eq!(parse_memory_limit("128mb").unwrap(), 128 * 1024 * 1024);
+        assert_eq!(parse_memory_limit("128m").unwrap(), 128 * 1024 * 1024);
+    }
+
+    #[test]
+    fn parse_memory_limit_gigabytes() {
+        assert_eq!(parse_memory_limit("1gb").unwrap(), 1024 * 1024 * 1024);
+        assert_eq!(parse_memory_limit("1g").unwrap(), 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn parse_memory_limit_case_insensitive() {
+        assert_eq!(parse_memory_limit("128MB").unwrap(), 128 * 1024 * 1024);
+        assert_eq!(parse_memory_limit("1GB").unwrap(), 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn parse_memory_limit_whitespace() {
+        assert_eq!(parse_memory_limit("  128mb  ").unwrap(), 128 * 1024 * 1024);
+    }
+
+    #[test]
+    fn parse_memory_limit_invalid() {
+        assert!(parse_memory_limit("abc").is_err());
+        assert!(parse_memory_limit("").is_err());
+        assert!(parse_memory_limit("mb").is_err());
+    }
+
+    #[test]
+    fn parse_timeout_milliseconds() {
+        assert_eq!(parse_timeout("500ms").unwrap(), Duration::from_millis(500));
+        assert_eq!(parse_timeout("500").unwrap(), Duration::from_millis(500));
+    }
+
+    #[test]
+    fn parse_timeout_seconds() {
+        assert_eq!(parse_timeout("5s").unwrap(), Duration::from_secs(5));
+        assert_eq!(parse_timeout("30s").unwrap(), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn parse_timeout_case_insensitive() {
+        assert_eq!(parse_timeout("5S").unwrap(), Duration::from_secs(5));
+        assert_eq!(parse_timeout("500MS").unwrap(), Duration::from_millis(500));
+    }
+
+    #[test]
+    fn parse_timeout_whitespace() {
+        assert_eq!(parse_timeout("  5s  ").unwrap(), Duration::from_secs(5));
+    }
+
+    #[test]
+    fn parse_timeout_invalid() {
+        assert!(parse_timeout("abc").is_err());
+        assert!(parse_timeout("").is_err());
+        assert!(parse_timeout("s").is_err());
+    }
+}
