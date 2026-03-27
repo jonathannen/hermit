@@ -396,6 +396,28 @@ fn empty_blocks() {
 }
 
 #[test]
+fn timeout_kills_infinite_loop() {
+    let mut c = Hermit::spawn_with_args(&["--timeout", "1s"]);
+    c.eval(r#"while(true){}"#);
+    assert_eq!(c.shutdown(), 142);
+}
+
+#[test]
+fn timeout_does_not_affect_fast_eval() {
+    let mut c = Hermit::spawn_with_args(&["--timeout", "2s"]);
+    c.eval(r#"console.log("fast")"#);
+    assert_eq!(c.read_line(), "fast");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
+fn timeout_kills_microtask_flood() {
+    let mut c = Hermit::spawn_with_args(&["--timeout", "1s"]);
+    c.eval(r#"const f = () => { while(true){} }; Promise.resolve().then(f);"#);
+    assert_eq!(c.shutdown(), 142);
+}
+
+#[test]
 fn invalid_js_does_not_crash() {
     let mut c = Hermit::spawn();
     c.eval(r#"{{{"#);

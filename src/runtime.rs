@@ -7,6 +7,9 @@ use crate::ops::op_log;
 /// Exit code for OOM (128 + SIGKILL)
 pub const OOM_EXIT_CODE: i32 = 137;
 
+/// Exit code for timeout (128 + SIGALRM)
+pub const TIMEOUT_EXIT_CODE: i32 = 142;
+
 extension!(
     hermit,
     ops = [op_log],

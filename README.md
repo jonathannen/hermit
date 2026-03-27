@@ -47,7 +47,7 @@ Whilst that's pretty good, it's the start. To use this I'd recommend a defence-i
 
 - **Keep deno_core and V8 up-to-date.** This means updating the crates and making sure they track the latest V8 version. Easily the most important thing you can do.
 - **Design your protocol carefully.** Exposing something like the current time may create opportunities for timing attacks. Consider short-lived tokens and other mechanisms where callouts are required.
-- **Limit resources.** Use the `--memory-limit` flag for the heap. For memory in general and the CPU, your host needs to manage that (e.g. execution time, open handles).
+- **Limit resources.** Use `--memory-limit` for the heap and `--timeout` for per-eval CPU time. For session-level limits, the host should manage process lifetime (e.g. total execution time, open handles).
 - **Consider containerization.** With Seccomp the need is debatable, but it doesn't hurt. [Bubblewrap](https://github.com/containers/bubblewrap) is worth considering.
 - **Static analysis.** Analyse code before it goes in. It's not perfect, but you can catch a lot early. You can also put tripwires in the globals.
 - **Nuke bad actors.** Halt and quarantine any code that behaves badly — large allocations, infinite loops, etc.
@@ -58,6 +58,7 @@ If you want to use this in production, [reach out](https://jonathannen.com/about
 ## Options
 
 - `--memory-limit <size>` — Set the V8 heap limit (default: 128MB). Limits heap only, not stack. Examples: `64mb`, `256m`, `1gb`.
+- `--timeout <duration>` — Max wall-clock time per eval block (default: none). If an eval exceeds this, the process exits with code 142. Examples: `5s`, `500ms`, `30s`. This covers synchronous infinite loops and microtask floods. Async code that yields to the event loop between evals is unaffected — for session-level timeouts, the host should manage process lifetime.
 - `--jit` — Enable V8 JIT compilation. By default, Hermit runs in jitless mode, which disables the JIT compiler entirely. Jitless is slower but reduces attack surface.
 
 ## Build & Test
