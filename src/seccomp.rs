@@ -59,6 +59,16 @@ fn itoa(mut n: i32, buf: &mut [u8]) -> usize {
     i
 }
 
+/// Offset of si_syscall within siginfo_t, defined by the Linux kernel ABI.
+/// This is stable on x86_64 and aarch64. Adding a new architecture requires
+/// verifying this offset against the kernel's struct siginfo layout.
+#[cfg(target_os = "linux")]
+const SI_SYSCALL_OFFSET: usize = {
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    compile_error!("si_syscall offset is only verified for x86_64 and aarch64");
+    0x18
+};
+
 /// SIGSYS handler that prints blocked syscall number.
 ///
 /// This is a signal handler, so it must only call async-signal-safe functions.
@@ -66,13 +76,11 @@ fn itoa(mut n: i32, buf: &mut [u8]) -> usize {
 #[cfg(target_os = "linux")]
 extern "C" fn sigsys_handler(_sig: libc::c_int, info: *mut libc::siginfo_t, _ctx: *mut libc::c_void) {
     // SAFETY: `info` is provided by the kernel and guaranteed valid in a SA_SIGINFO handler.
-    // We read si_syscall at offset 0x18 (24 bytes) from the start of siginfo_t.
-    // This offset is stable on Linux aarch64 and x86_64 (defined by the kernel ABI).
     // We cannot use the libc crate's siginfo_t fields directly because si_syscall
     // is inside a union that libc doesn't fully expose.
     unsafe {
         let info_ptr = info as *const u8;
-        let syscall = *(info_ptr.add(0x18) as *const i32);
+        let syscall = *(info_ptr.add(SI_SYSCALL_OFFSET) as *const i32);
 
         let mut buf = [0u8; 64];
         let prefix = b"SECCOMP BLOCKED syscall: ";
