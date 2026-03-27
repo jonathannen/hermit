@@ -2,7 +2,7 @@
 
 Hermit runs JavaScript in a cave. You can pass notes in and get notes back. That's it.
 
-More specifically, Hermit runs JavaScript inside V8 isolates, using stdio as the control protocol. Code is sent via stdin and eval'd in the isolate. Input is buffered line-by-line until a blank line is received, at which point the accumulated block is evaluated. On EOF, any remaining buffered code is flushed and evaluated.
+More specifically, Hermit runs JavaScript inside V8 isolates, using stdio as the control protocol. Code is sent via stdin and eval'd in the isolate. Input is buffered line-by-line until a blank line is received, at which point the accumulated block is evaluated. At this point, the Hermit waits for all microtasks to complete. On EOF, any remaining buffered code is flushed and evaluated.
 
 The code in the isolate can call `console.log` and that's it. No file system, no environment variables, no `require`, and extremely limited globals.
 
@@ -58,7 +58,7 @@ If you want to use this in production, [reach out](https://jonathannen.com/about
 ## Options
 
 - `--memory-limit <size>` — Set the V8 heap limit (default: 128MB). Limits heap only, not stack. If the heap limit is reached, the process exits with code 137. Examples: `64mb`, `256m`, `1gb`.
-- `--timeout <duration>` — Max wall-clock time per eval block (default: none). If an eval exceeds this, the process exits with code 142. Examples: `5s`, `500ms`, `30s`. This covers synchronous infinite loops and microtask floods. Async code that yields to the event loop between evals is unaffected — for session-level timeouts, the host should manage process lifetime.
+- `--timeout <duration>` — Max wall-clock time per eval block (default: none). If an eval exceeds this, the process exits with code 142. Examples: `5s`, `500ms`, `30s`. The timeout spans both script execution and the microtask drain that follows, so it covers synchronous infinite loops, microtask floods, and unawaited async functions (e.g. `a()` without `await` where `a` loops forever). For session-level timeouts, the host should manage process lifetime.
 - `--jit` — Enable V8 JIT compilation. By default, Hermit runs in jitless mode, which disables the JIT compiler entirely. Jitless is slower but reduces attack surface.
 
 ## Build & Test
