@@ -73,11 +73,11 @@ impl Watchdog {
     }
 
     fn start(&self) {
-        let _ = self.tx.send(true);
+        self.tx.send(true).expect("watchdog thread died");
     }
 
     fn stop(&self) {
-        let _ = self.tx.send(false);
+        self.tx.send(false).expect("watchdog thread died");
     }
 }
 
