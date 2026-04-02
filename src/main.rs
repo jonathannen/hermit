@@ -231,6 +231,51 @@ fn main() {
     }
 }
 
+/// Apply OS-level resource limits. Called after runtime init, before seccomp.
+fn apply_rlimits() {
+    #[cfg(unix)]
+    {
+        use libc::{rlimit, setrlimit, RLIMIT_FSIZE, RLIMIT_NOFILE};
+
+        // RLIMIT_NOFILE: cap open file descriptors. V8/tokio have already opened
+        // theirs, so we freeze at current count + small headroom for openat reads.
+        // This prevents FD exhaustion from a post-escape attacker.
+        let mut current = rlimit { rlim_cur: 0, rlim_max: 0 };
+        // SAFETY: getrlimit reads into a stack-allocated rlimit struct.
+        if unsafe { libc::getrlimit(RLIMIT_NOFILE, &mut current) } == 0 {
+            let cap = current.rlim_cur.min(64); // at most 64 FDs total
+            let limit = rlimit { rlim_cur: cap, rlim_max: cap };
+            // SAFETY: setrlimit with valid rlimit struct, lowering limits only.
+            unsafe { setrlimit(RLIMIT_NOFILE, &limit); }
+        }
+
+        // RLIMIT_FSIZE: prevent creating files (belt-and-suspenders with seccomp
+        // openat read-only restriction). Set to 0 = no file writes allowed.
+        let zero_limit = rlimit { rlim_cur: 0, rlim_max: 0 };
+        // SAFETY: setrlimit with valid rlimit struct.
+        unsafe { setrlimit(RLIMIT_FSIZE, &zero_limit); }
+
+        // RLIMIT_NPROC: cap number of processes/threads. V8 threads are already
+        // created, so freeze at current count. This prevents thread explosion.
+        #[cfg(target_os = "linux")]
+        {
+            use libc::RLIMIT_NPROC;
+            // Count current threads from /proc/self/status
+            let nproc = std::fs::read_to_string("/proc/self/status")
+                .ok()
+                .and_then(|s| {
+                    s.lines()
+                        .find(|l| l.starts_with("Threads:"))
+                        .and_then(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok())
+                })
+                .unwrap_or(32); // fallback: generous cap
+            let nproc_limit = rlimit { rlim_cur: nproc + 8, rlim_max: nproc + 8 };
+            // SAFETY: setrlimit with valid rlimit struct.
+            unsafe { setrlimit(RLIMIT_NPROC, &nproc_limit); }
+        }
+    }
+}
+
 const MAX_BLOCK_SIZE: usize = 64 * 1024 * 1024; // 64MB
 
 fn spawn_stdin_reader() -> mpsc::UnboundedReceiver<String> {
@@ -277,6 +322,11 @@ async fn run(
     timeout: Option<Duration>,
 ) -> Result<(), AnyError> {
     let mut js_runtime = runtime::create_runtime(memory_limit, allow_jit)?;
+
+    // Apply OS-level resource limits before entering the sandbox.
+    // These act as a backstop for resource exhaustion attacks that bypass V8's
+    // heap limit (which only covers the JS heap, not stack, threads, or FDs).
+    apply_rlimits();
 
     // Install seccomp filter (Linux only, no-op on macOS)
     seccomp::install(allow_jit).map_err(|e| {
