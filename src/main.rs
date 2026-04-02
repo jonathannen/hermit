@@ -237,13 +237,13 @@ fn apply_rlimits() {
     {
         use libc::{rlimit, setrlimit, RLIMIT_FSIZE, RLIMIT_NOFILE};
 
-        // RLIMIT_NOFILE: cap open file descriptors. V8/tokio have already opened
-        // theirs, so we freeze at current count + small headroom for openat reads.
-        // This prevents FD exhaustion from a post-escape attacker.
+        // RLIMIT_NOFILE: cap open file descriptors at 64 (or the current soft
+        // limit if lower). V8/tokio have already opened their FDs; this prevents
+        // FD exhaustion from a post-escape attacker.
         let mut current = rlimit { rlim_cur: 0, rlim_max: 0 };
         // SAFETY: getrlimit reads into a stack-allocated rlimit struct.
         if unsafe { libc::getrlimit(RLIMIT_NOFILE, &mut current) } == 0 {
-            let cap = current.rlim_cur.min(64); // at most 64 FDs total
+            let cap = current.rlim_cur.min(64);
             let limit = rlimit { rlim_cur: cap, rlim_max: cap };
             // SAFETY: setrlimit with valid rlimit struct, lowering limits only.
             unsafe { setrlimit(RLIMIT_NOFILE, &limit); }

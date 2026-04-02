@@ -169,8 +169,8 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
     allow(&mut rules, libc::SYS_exit);
     allow(&mut rules, libc::SYS_exit_group);
 
-    // Thread creation: clone(2) restricted to block namespace flags.
-    // clone3 is allowed here but a second filter (below) returns ENOSYS for it.
+    // Thread creation: clone(2) requires CLONE_THREAD and blocks namespace flags.
+    // clone3 is allowed here but a stacked filter (below) returns ENOSYS for it.
     // clone3's flags are inside a userspace struct that seccomp BPF cannot inspect,
     // so we force glibc to fall back to the filterable clone(2) syscall.
     allow_clone_thread_only(&mut rules);
@@ -260,9 +260,13 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Install stage-2 seccomp filter after warmup eval.
-/// This drastically reduces the allowed syscalls to only what V8 needs
-/// during steady-state execution (no file access, no thread creation,
-/// no signals, no network — just memory management and futex).
+/// Narrows the stage-1 allowlist by blocking seccomp(2) (preventing further
+/// filter changes) and reinforcing all stage-1 restrictions. V8's lazy GC
+/// thread creation means thread/signal syscalls must remain available.
+///
+/// Remaining attack surface: read-only filesystem (openat), thread creation
+/// (clone with namespace flags blocked), and memory management. For full
+/// filesystem isolation, use a mount namespace or bubblewrap wrapper.
 ///
 /// Call this AFTER running a warmup eval to trigger V8's lazy init.
 #[cfg(target_os = "linux")]
@@ -307,8 +311,8 @@ pub fn install_stage2(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>>
     allow(&mut rules, libc::SYS_exit);
     allow(&mut rules, libc::SYS_exit_group);
 
-    // Thread creation: V8 may lazily spawn GC threads after warmup.
-    // clone(2) restricted to block namespace flags, same as stage 1.
+    // Thread creation: V8 lazily spawns GC helper threads after warmup.
+    // clone(2) requires CLONE_THREAD and blocks namespace flags.
     // clone3 allowed so the stacked ENOSYS filter (not Trap) takes effect.
     allow_clone_thread_only(&mut rules);
     allow(&mut rules, libc::SYS_clone3);
@@ -516,14 +520,17 @@ fn allow_openat_readonly(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
     rules.insert(libc::SYS_openat, vec![rule]);
 }
 
-/// Allow clone only for thread creation (block namespace escapes like CLONE_NEWUSER)
+/// Allow clone only for thread creation.
+///
+/// Two conditions enforced (AND'd):
+/// 1. CLONE_THREAD must be set — this is a thread, not a new process/fork.
+/// 2. No namespace flags (CLONE_NEWUSER, CLONE_NEWPID, etc.) — prevents
+///    container/sandbox escape.
+///
+/// clone(2) flags are in arg0 on both x86_64 and aarch64.
 #[cfg(target_os = "linux")]
 fn allow_clone_thread_only(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
-    // Block dangerous clone flags that could be used for container/sandbox escape:
-    // - CLONE_NEWNS, CLONE_NEWUSER, CLONE_NEWPID, CLONE_NEWNET, etc.
-    // We use masked_eq to check that none of the namespace flags are set.
-    //
-    // clone(2) flags are in arg0 on both x86_64 and aarch64.
+    const CLONE_THREAD: u64 = 0x00010000;
     const CLONE_NEWNS: u64 = 0x00020000;
     const CLONE_NEWCGROUP: u64 = 0x02000000;
     const CLONE_NEWUTS: u64 = 0x04000000;
@@ -535,15 +542,25 @@ fn allow_clone_thread_only(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
     let dangerous_flags =
         CLONE_NEWNS | CLONE_NEWCGROUP | CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWNET;
 
-    // masked_eq(mask, val): (arg & mask) == val
-    // We want: (flags & dangerous_flags) == 0
-    let rule = SeccompRule::new(vec![SeccompCondition::new(
-        0, // flags in arg0 on x86_64
-        SeccompCmpArgLen::Qword,
-        SeccompCmpOp::MaskedEq(dangerous_flags),
-        0, // (flags & dangerous) must equal 0
-    )
-    .expect("valid condition")])
+    // SeccompRule with multiple conditions = AND. Both must pass.
+    let rule = SeccompRule::new(vec![
+        // Condition 1: CLONE_THREAD must be set
+        SeccompCondition::new(
+            0,
+            SeccompCmpArgLen::Qword,
+            SeccompCmpOp::MaskedEq(CLONE_THREAD),
+            CLONE_THREAD, // (flags & CLONE_THREAD) == CLONE_THREAD
+        )
+        .expect("valid condition"),
+        // Condition 2: no namespace flags
+        SeccompCondition::new(
+            0,
+            SeccompCmpArgLen::Qword,
+            SeccompCmpOp::MaskedEq(dangerous_flags),
+            0, // (flags & dangerous) == 0
+        )
+        .expect("valid condition"),
+    ])
     .expect("valid rule");
 
     rules.insert(libc::SYS_clone, vec![rule]);
