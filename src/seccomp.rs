@@ -180,7 +180,7 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
     allow(&mut rules, libc::SYS_rseq);
     allow(&mut rules, libc::SYS_sched_getaffinity);
     // sched_setaffinity: BLOCKED — setting CPU affinity not needed, only reading
-    allow(&mut rules, libc::SYS_sched_yield);
+    // sched_yield: BLOCKED — V8 threads don't need to explicitly yield
     allow(&mut rules, libc::SYS_sched_getparam); // V8 thread scheduling
     allow(&mut rules, libc::SYS_sched_getscheduler); // V8 thread scheduling
 
