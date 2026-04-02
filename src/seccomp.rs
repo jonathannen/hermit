@@ -137,7 +137,7 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
 
     // These must remain unrestricted for V8/tokio internals
     allow_safe_ioctl(&mut rules); // ioctl restricted to safe terminal ops
-    allow(&mut rules, libc::SYS_fstat); // V8 needs fstat on internal fds
+    // fstat: BLOCKED — V8 init is done before seccomp; no runtime need expected
     allow(&mut rules, libc::SYS_close);
     allow_safe_fcntl(&mut rules);
     allow_openat_readonly(&mut rules); // openat restricted to read-only
