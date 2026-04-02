@@ -196,8 +196,7 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_arch = "aarch64")]
     allow(&mut rules, 172); // getresgid on aarch64
 
-    // Nanosleep (V8 GC thread sync)
-    allow(&mut rules, libc::SYS_clock_nanosleep);
+    // clock_nanosleep: BLOCKED — V8 GC shouldn't need sleep post-init
 
     // prctl is needed at runtime (e.g. PR_SET_NAME for thread naming by tokio/V8)
     allow(&mut rules, libc::SYS_prctl);
