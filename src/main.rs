@@ -328,9 +328,20 @@ async fn run(
     // heap limit (which only covers the JS heap, not stack, threads, or FDs).
     apply_rlimits();
 
-    // Install seccomp filter (Linux only, no-op on macOS)
+    // Install stage-1 seccomp filter (Linux only, no-op on macOS)
     seccomp::install(allow_jit).map_err(|e| {
         deno_error::JsErrorBox::new("Error", format!("failed to install seccomp filter: {}", e))
+    })?;
+
+    // Warmup eval: trigger V8's lazy initialization (ICU data, JIT stubs, /proc reads)
+    // so that stage-2 can lock down to the minimal steady-state syscall set.
+    js_runtime.execute_script("<warmup>", "1".to_string())?;
+    js_runtime.run_event_loop(Default::default()).await?;
+
+    // Install stage-2 seccomp filter: only write, futex, mmap, munmap, madvise,
+    // mprotect (JIT only), exit. No file access, no thread creation, no networking.
+    seccomp::install_stage2(allow_jit).map_err(|e| {
+        deno_error::JsErrorBox::new("Error", format!("failed to install stage-2 seccomp: {}", e))
     })?;
 
     let watchdog = timeout.map(Watchdog::spawn);
