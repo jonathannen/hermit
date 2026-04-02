@@ -169,18 +169,18 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
     allow(&mut rules, libc::SYS_exit);
     allow(&mut rules, libc::SYS_exit_group);
 
-    // Thread stuff (V8 may use)
-    #[cfg(target_arch = "x86_64")]
-    allow_clone_thread_only(&mut rules); // clone restricted: namespace flags blocked
-    allow(&mut rules, libc::SYS_clone3); // newer glibc prefers clone3 for thread creation
-    #[cfg(target_arch = "aarch64")]
-    allow(&mut rules, libc::SYS_clone); // older aarch64 glibc falls back to clone
+    // Thread creation: clone(2) restricted to block namespace flags.
+    // clone3 is allowed here but a second filter (below) returns ENOSYS for it.
+    // clone3's flags are inside a userspace struct that seccomp BPF cannot inspect,
+    // so we force glibc to fall back to the filterable clone(2) syscall.
+    allow_clone_thread_only(&mut rules);
+    allow(&mut rules, libc::SYS_clone3); // overridden to ENOSYS by second filter
     allow(&mut rules, libc::SYS_set_tid_address);
     allow(&mut rules, libc::SYS_set_robust_list);
     allow(&mut rules, libc::SYS_rseq);
     allow(&mut rules, libc::SYS_sched_getaffinity);
     // sched_setaffinity: BLOCKED — setting CPU affinity not needed, only reading
-    // sched_yield: BLOCKED — V8 threads don't need to explicitly yield
+    allow(&mut rules, libc::SYS_sched_yield); // V8 GC thread uses under memory pressure
     allow(&mut rules, libc::SYS_sched_getparam); // V8 thread scheduling
     allow(&mut rules, libc::SYS_sched_getscheduler); // V8 thread scheduling
 
@@ -197,7 +197,8 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
 
     // clock_nanosleep: BLOCKED — V8 GC shouldn't need sleep post-init
 
-    // prctl: BLOCKED — thread naming (PR_SET_NAME) is not security-critical
+    // prctl restricted to safe operations (thread naming needed for clone(2) fallback)
+    allow_safe_prctl(&mut rules);
 
     // Poll/epoll for tokio
     // epoll_create1: BLOCKED — tokio creates its epoll fd during init
@@ -216,9 +217,30 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
     // - SYS_socket, SYS_connect, etc: networking
     // - SYS_open: filesystem (openat is allowed read-only)
     // - SYS_execve: no exec
-    // - SYS_fork: no forking (clone/clone3 allowed for threads only)
+    // - SYS_fork: no forking (clone allowed for threads only, clone3 returns ENOSYS)
     // - SYS_ptrace: no debugging/inspection
 
+    // Install clone3 ENOSYS filter FIRST (before the restrictive main filter).
+    // clone3's flags are inside a userspace struct that seccomp BPF cannot inspect,
+    // so we return ENOSYS to force glibc to fall back to clone(2), which we CAN filter.
+    // This must be installed before the main filter because the main filter blocks
+    // the seccomp(2) syscall needed to install additional filters.
+    let mut clone3_rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
+    clone3_rules.insert(libc::SYS_clone3, vec![]);
+
+    let clone3_filter = SeccompFilter::new(
+        clone3_rules,
+        SeccompAction::Allow,                       // mismatch (non-clone3): pass through
+        SeccompAction::Errno(libc::ENOSYS as u32), // match (clone3): return ENOSYS
+        arch,
+    )?;
+
+    let clone3_bpf: BpfProgram = clone3_filter.try_into()?;
+    seccompiler::apply_filter(&clone3_bpf)?;
+
+    // Main restrictive filter. With stacked filters the kernel picks the most
+    // restrictive action per-syscall. clone3 is allowed here (overridden to ENOSYS
+    // by the filter above since ENOSYS is more restrictive than Allow).
     let filter = SeccompFilter::new(
         rules,
         default_action,
@@ -340,6 +362,40 @@ fn allow_mmap_private_only(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
 }
 
 
+/// Allow only safe prctl operations (thread naming, VMA naming, seccomp setup)
+#[cfg(target_os = "linux")]
+fn allow_safe_prctl(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
+    // prctl(option, arg2, ...) - option is arg0
+    //
+    // Safe ops we allow:
+    // - PR_SET_NAME (15) - set thread name (glibc uses during thread creation)
+    // - PR_SET_VMA (0x53564d41) - name anonymous VMAs (V8 uses, may return EINVAL)
+    // - PR_SET_NO_NEW_PRIVS (38) - already set, re-setting is idempotent and harmless
+    //   (needed because seccompiler calls this when installing additional filters)
+    //
+    // Dangerous ops we block:
+    // - PR_SET_SECCOMP (22) - could modify seccomp filter
+    // - PR_SET_DUMPABLE (4) - already set to 0, re-enabling would allow core dumps
+    // - PR_SET_PDEATHSIG (1) - could be used for process signaling
+    const PR_SET_NAME: u64 = 15;
+    const PR_SET_NO_NEW_PRIVS: u64 = 38;
+    const PR_SET_VMA: u64 = 0x53564d41;
+
+    let prctl_rules = vec![
+        SeccompRule::new(vec![SeccompCondition::new(0, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, PR_SET_NAME)
+            .expect("valid")])
+        .expect("valid"),
+        SeccompRule::new(vec![SeccompCondition::new(0, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, PR_SET_NO_NEW_PRIVS)
+            .expect("valid")])
+        .expect("valid"),
+        SeccompRule::new(vec![SeccompCondition::new(0, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, PR_SET_VMA)
+            .expect("valid")])
+        .expect("valid"),
+    ];
+
+    rules.insert(libc::SYS_prctl, prctl_rules);
+}
+
 /// Allow openat only for read-only opens (block write, create, truncate, append)
 #[cfg(target_os = "linux")]
 fn allow_openat_readonly(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
@@ -363,13 +419,12 @@ fn allow_openat_readonly(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
 
 /// Allow clone only for thread creation (block namespace escapes like CLONE_NEWUSER)
 #[cfg(target_os = "linux")]
-#[cfg(target_arch = "x86_64")]
 fn allow_clone_thread_only(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
     // Block dangerous clone flags that could be used for container/sandbox escape:
     // - CLONE_NEWNS, CLONE_NEWUSER, CLONE_NEWPID, CLONE_NEWNET, etc.
     // We use masked_eq to check that none of the namespace flags are set.
     //
-    // On x86_64, clone(2) flags are in arg0.
+    // clone(2) flags are in arg0 on both x86_64 and aarch64.
     const CLONE_NEWNS: u64 = 0x00020000;
     const CLONE_NEWCGROUP: u64 = 0x02000000;
     const CLONE_NEWUTS: u64 = 0x04000000;
