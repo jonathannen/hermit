@@ -203,14 +203,14 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
     allow(&mut rules, libc::SYS_prctl);
 
     // Poll/epoll for tokio
-    allow(&mut rules, libc::SYS_epoll_create1);
+    // epoll_create1: BLOCKED — tokio creates its epoll fd during init
     allow(&mut rules, libc::SYS_epoll_ctl);
     // epoll_wait only exists on x86_64, aarch64 uses epoll_pwait
     #[cfg(target_arch = "x86_64")]
     allow(&mut rules, libc::SYS_epoll_wait);
     allow(&mut rules, libc::SYS_epoll_pwait);
     allow(&mut rules, libc::SYS_epoll_pwait2);
-    allow(&mut rules, libc::SYS_eventfd2); // tokio reactor wakeup
+    // eventfd2: BLOCKED — tokio creates its eventfds during init
 
     // === EXPLICITLY BLOCKED (tripwires) ===
     // These are blocked by default (not in allow list), but listing for clarity:
