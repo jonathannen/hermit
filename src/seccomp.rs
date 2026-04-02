@@ -198,8 +198,7 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
 
     // clock_nanosleep: BLOCKED — V8 GC shouldn't need sleep post-init
 
-    // prctl is needed at runtime (e.g. PR_SET_NAME for thread naming by tokio/V8)
-    allow(&mut rules, libc::SYS_prctl);
+    // prctl: BLOCKED — thread naming (PR_SET_NAME) is not security-critical
 
     // Poll/epoll for tokio
     // epoll_create1: BLOCKED — tokio creates its epoll fd during init
