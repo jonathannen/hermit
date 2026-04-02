@@ -4,13 +4,13 @@ Hermit runs JavaScript in a cave. You can pass notes in and get notes back. That
 
 More specifically, Hermit runs JavaScript inside V8 isolates, using stdio as the control protocol. Code is sent via stdin and eval'd in the isolate. Input is buffered line-by-line until a blank line is received, at which point the accumulated block is evaluated. At this point, the Hermit waits for all microtasks to complete. On EOF, any remaining buffered code is flushed and evaluated.
 
-The code in the isolate can call `console.log` and that's it. No environment variables, no `require`, and extremely limited globals. Seccomp restricts filesystem access to read-only (no writes, creates, or truncates), but read-only access to paths like `/proc` and `/sys` remains possible after a V8 escape — use a mount namespace or [Bubblewrap](https://github.com/containers/bubblewrap) for full filesystem isolation.
+The code in the isolate can call `console.log` and that's it. No environment variables, no `require`, and extremely limited globals.
 
 Hermit provides the primitive isolate. It's expected that you'd build a host and protocol on top for doing real work.
 
 The typical pattern is to send JavaScript wrapped in a protocol handler, then invoke this handler with later evals. The handler can interact with the host via console.log output — the protocol on how they communicate is up to you. See `examples/fetch` as an example. Async handlers and interactions can be supported. See `tests/fixtures/async_bridge.js` as a starting point.
 
-Hermit uses seccomp on Linux. There is a Mac build for local development only.
+On Linux, Hermit layers multiple OS-level sandboxing mechanisms on top of V8's isolate. There is a Mac build for local development only.
 
 ## Example
 
@@ -34,10 +34,14 @@ See `examples` and `tests/fixtures` for other examples. You can also substitute 
 ## Security Layers
 
 - **[V8 Isolate](https://v8.dev/docs/embed#isolates)** — each instance of Hermit runs its own V8 isolate, the same process-level sandbox that Chrome uses to separate tabs.
-- **[Seccomp](https://man7.org/linux/man-pages/man2/seccomp.2.html)** (Linux only) — a syscall filter that restricts what the process can do at the kernel level, even if the V8 sandbox is escaped. There are two Seccomp stages, one on isolate initialization and a further tightening afterwards.
 - **Frozen globals** — the JavaScript environment is stripped down to a minimal set of builtins (`Array`, `Object`, `Promise`, `JSON`, etc.) with no `Date`, `Math`, `Proxy`, `eval`, typed arrays, or access to `Deno`/`Node` APIs. All prototypes and `globalThis` are frozen.
+- **[Mount namespace](https://man7.org/linux/man-pages/man7/mount_namespaces.7.html)** (Linux) — on startup, Hermit creates a new user and mount namespace and pivots to a minimal tmpfs root. During V8 initialization only `/proc/self`, `/sys/devices/system/cpu`, and `/dev/urandom` are visible. After warmup, `/dev/urandom` and `/sys` are unmounted. The host filesystem (source trees, secrets, `/etc`) is never reachable. Falls back gracefully if user namespaces are unavailable (e.g. restricted Docker configurations).
+- **[Seccomp](https://man7.org/linux/man-pages/man2/seccomp.2.html)** (Linux) — a two-stage syscall filter that restricts what the process can do at the kernel level, even if the V8 sandbox is escaped. Stage 1 is installed after V8 initialization and blocks networking, exec, fork, timing, and most filesystem operations. A warmup eval then triggers V8's lazy initialization. Stage 2 locks down further and blocks the `seccomp` syscall itself, preventing a post-escape attacker from loosening the filter. Argument-level filtering restricts `clone` to require `CLONE_THREAD` (no fork/namespace escape), `mmap` to `MAP_PRIVATE` only (no shared memory), `madvise` to safe flags, and `openat` to read-only. `clone3` is forced to return `ENOSYS` via a stacked filter so glibc falls back to the filterable `clone` syscall.
+- **FD hygiene** — all inherited file descriptors above stderr are closed before any runtime initialization, preventing interaction with FDs the parent may have left open.
+- **Resource limits** — `RLIMIT_NOFILE` (capped at 64), `RLIMIT_FSIZE` (zero — no file writes), and `RLIMIT_NPROC` (frozen at current thread count + headroom) are set automatically. V8 heap limits and per-eval timeouts are configurable via `--memory-limit` and `--timeout`.
+- **prctl hardening** — `PR_SET_DUMPABLE` is disabled (no core dumps or ptrace attachment) and `PR_SET_NO_NEW_PRIVS` is set (no privilege escalation via execve).
 
-Note: Seccomp is naturally Linux only. There is a Mac build for local development only.
+Note: Seccomp and mount namespaces are Linux only. There is a Mac build for local development only.
 
 ## Security Considerations
 
@@ -47,8 +51,8 @@ Whilst that's pretty good, it's the start. To use this I'd recommend a defence-i
 
 - **Keep deno_core and V8 up-to-date.** This means updating the crates and making sure they track the latest V8 version. Easily the most important thing you can do.
 - **Design your protocol carefully.** Exposing something like the current time may create opportunities for timing attacks. Consider short-lived tokens and other mechanisms where callouts are required.
-- **Limit resources.** Use `--memory-limit` for the heap and `--timeout` for per-eval CPU time. Hermit also sets OS-level limits automatically (`RLIMIT_NOFILE`, `RLIMIT_FSIZE`, `RLIMIT_NPROC`). For session-level limits, the host should manage process lifetime (e.g. total execution time, open handles).
-- **Isolate the filesystem.** Seccomp blocks file writes but still allows read-only access to the host filesystem after a V8 escape. A mount namespace, [Bubblewrap](https://github.com/containers/bubblewrap), or minimal chroot removes this. This is the single biggest remaining gap.
+- **Limit resources.** Use `--memory-limit` for the heap and `--timeout` for per-eval CPU time. Hermit sets OS-level rlimits automatically, but the host should manage session-level process lifetime (e.g. total execution time, open handles).
+- **Ensure namespace isolation is active.** Mount namespace isolation requires Linux user namespaces. If Hermit logs "mount namespace setup failed" on startup, the host filesystem is still reachable read-only via seccomp. To enable namespaces in Docker, use `--privileged` or configure AppArmor/seccomp to allow `unshare`. On bare metal, ensure `/proc/sys/kernel/unprivileged_userns_clone` is `1`.
 - **Static analysis.** Analyse code before it goes in. It's not perfect, but you can catch a lot early. You can also put tripwires in the globals.
 - **Nuke bad actors.** Halt and quarantine any code that behaves badly — large allocations, infinite loops, etc.
 - **The usual.** Users, permissions, least privilege.
@@ -71,9 +75,9 @@ cargo test
 
 ## Remaining Tasks
 
-- **macOS**: Seccomp only applies on Linux. It would be great to find a similar set of entitlements for macOS.
+- **macOS sandbox**: Seccomp and mount namespaces only apply on Linux. A similar set of entitlements for macOS (e.g. `sandbox_init`, App Sandbox) would be valuable.
 - **Pooling**: Unclear whether pooling isolates should be Hermit's job or its host's.
-- **Hardening**: Contributions are very welcome, especially on seccomp rules.
+- **Hardening**: Contributions are welcome. Potential areas: restricting `/proc/self` access after warmup, cgroup-based resource limits, and further seccomp argument filtering.
 
 ## Alternatives
 
@@ -89,7 +93,7 @@ There are several ways to sandbox JavaScript. Each makes different trade-offs be
 
 **[Cloudflare Workers](https://workers.cloudflare.com/)** / **[Deno Deploy](https://deno.com/deploy)** — managed V8 isolate platforms. These are specific to those vendors. Cloudflare have the Open Source [workerd](https://github.com/cloudflare/workerd) based off Workers.
 
-**Hermit** sits in a specific niche: V8 performance and full JS semantics (including async/await), with the smallest possible API surface (just `console.log`), defence-in-depth sandboxing (V8 isolate + seccomp + frozen globals), and a dead-simple stdio protocol. It's a raw primitive — you build the protocol, the host, and the orchestration yourself.
+**Hermit** sits in a specific niche: V8 performance and full JS semantics (including async/await), with the smallest possible API surface (just `console.log`), defence-in-depth sandboxing (V8 isolate + mount namespace + two-stage seccomp + frozen globals + rlimits + FD hygiene), and a dead-simple stdio protocol. It's a raw primitive — you build the protocol, the host, and the orchestration yourself.
 
 ## Giants
 
