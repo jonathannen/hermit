@@ -4,13 +4,13 @@ Hermit runs JavaScript in a cave. You can pass notes in and get notes back. That
 
 More specifically, Hermit runs JavaScript inside V8 isolates, using stdio as the control protocol. Code is sent via stdin and eval'd in the isolate. Input is buffered line-by-line until a blank line is received, at which point the accumulated block is evaluated. At this point, the Hermit waits for all microtasks to complete. On EOF, any remaining buffered code is flushed and evaluated.
 
-The code in the isolate can call `console.log` and that's it. No file system, no environment variables, no `require`, and extremely limited globals.
+The code in the isolate can call `console.log` and that's it. No environment variables, no `require`, and extremely limited globals. Seccomp restricts filesystem access to read-only (no writes, creates, or truncates), but read-only access to paths like `/proc` and `/sys` remains possible after a V8 escape — use a mount namespace or [Bubblewrap](https://github.com/containers/bubblewrap) for full filesystem isolation.
 
 Hermit provides the primitive isolate. It's expected that you'd build a host and protocol on top for doing real work.
 
-The typical pattern is to send JavaScript wrapped in a protocol handler, then invoke this handler with later evals. The handler can interact with the host via console.log output — the protocol on how they communicate is up to you. See `examples/fetch` as an example.
+The typical pattern is to send JavaScript wrapped in a protocol handler, then invoke this handler with later evals. The handler can interact with the host via console.log output — the protocol on how they communicate is up to you. See `examples/fetch` as an example. Async handlers and interactions can be supported. See `tests/fixtures/async_bridge.js` as a starting point.
 
-Async handlers and interactions can be supported. See `tests/fixtures/async_bridge.js` as a starting point.
+Hermit uses seccomp on Linux. There is a Mac build for local development only.
 
 ## Example
 
@@ -34,7 +34,7 @@ See `examples` and `tests/fixtures` for other examples. You can also substitute 
 ## Security Layers
 
 - **[V8 Isolate](https://v8.dev/docs/embed#isolates)** — each instance of Hermit runs its own V8 isolate, the same process-level sandbox that Chrome uses to separate tabs.
-- **[Seccomp](https://man7.org/linux/man-pages/man2/seccomp.2.html)** (Linux only) — a syscall filter that restricts what the process can do at the kernel level, even if the V8 sandbox is escaped.
+- **[Seccomp](https://man7.org/linux/man-pages/man2/seccomp.2.html)** (Linux only) — a syscall filter that restricts what the process can do at the kernel level, even if the V8 sandbox is escaped. There are two Seccomp stages, one on isolate initialization and a further tightening afterwards.
 - **Frozen globals** — the JavaScript environment is stripped down to a minimal set of builtins (`Array`, `Object`, `Promise`, `JSON`, etc.) with no `Date`, `Math`, `Proxy`, `eval`, typed arrays, or access to `Deno`/`Node` APIs. All prototypes and `globalThis` are frozen.
 
 Note: Seccomp is naturally Linux only. There is a Mac build for local development only.
@@ -47,8 +47,8 @@ Whilst that's pretty good, it's the start. To use this I'd recommend a defence-i
 
 - **Keep deno_core and V8 up-to-date.** This means updating the crates and making sure they track the latest V8 version. Easily the most important thing you can do.
 - **Design your protocol carefully.** Exposing something like the current time may create opportunities for timing attacks. Consider short-lived tokens and other mechanisms where callouts are required.
-- **Limit resources.** Use `--memory-limit` for the heap and `--timeout` for per-eval CPU time. For session-level limits, the host should manage process lifetime (e.g. total execution time, open handles).
-- **Consider containerization.** With Seccomp the need is debatable, but it doesn't hurt. [Bubblewrap](https://github.com/containers/bubblewrap) is worth considering.
+- **Limit resources.** Use `--memory-limit` for the heap and `--timeout` for per-eval CPU time. Hermit also sets OS-level limits automatically (`RLIMIT_NOFILE`, `RLIMIT_FSIZE`, `RLIMIT_NPROC`). For session-level limits, the host should manage process lifetime (e.g. total execution time, open handles).
+- **Isolate the filesystem.** Seccomp blocks file writes but still allows read-only access to the host filesystem after a V8 escape. A mount namespace, [Bubblewrap](https://github.com/containers/bubblewrap), or minimal chroot removes this. This is the single biggest remaining gap.
 - **Static analysis.** Analyse code before it goes in. It's not perfect, but you can catch a lot early. You can also put tripwires in the globals.
 - **Nuke bad actors.** Halt and quarantine any code that behaves badly — large allocations, infinite loops, etc.
 - **The usual.** Users, permissions, least privilege.
@@ -59,7 +59,7 @@ If you want to use this in production, [reach out](https://jonathannen.com/about
 
 - `--memory-limit <size>` — Set the V8 heap limit (default: 128MB). Limits heap only, not stack. If the heap limit is reached, the process exits with code 137. Examples: `64mb`, `256m`, `1gb`.
 - `--timeout <duration>` — Max wall-clock time per eval block (default: none). If an eval exceeds this, the process exits with code 142. Examples: `5s`, `500ms`, `30s`. The timeout spans both script execution and the microtask drain that follows, so it covers synchronous infinite loops, microtask floods, and unawaited async functions (e.g. `a()` without `await` where `a` loops forever). For session-level timeouts, the host should manage process lifetime.
-- `--jit` — Enable V8 JIT compilation. By default, Hermit runs in jitless mode, which disables the JIT compiler entirely. Jitless is slower but reduces attack surface.
+- `--jit` — Enable V8 JIT compilation (weaker security). By default, Hermit runs in jitless mode, which disables the JIT compiler entirely. JIT mode is faster but materially weakens the sandbox: `mprotect` must remain unrestricted so V8 can make pages executable at runtime, which is the key primitive an attacker needs for shellcode injection after a V8 escape. In jitless mode, `mprotect` with `PROT_EXEC` is blocked by seccomp. **Use jitless (the default) for untrusted code.** Only enable `--jit` when you trust the code or need the performance and accept the wider attack surface.
 
 ## Build & Test
 
