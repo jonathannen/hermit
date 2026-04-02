@@ -7,7 +7,7 @@ set -e
 IMAGE="hermit-test"
 PLATFORM="linux/aarch64"
 
-echo "=== Building test image (x86_64) ==="
+echo "=== Building test image ($PLATFORM) ==="
 docker build --platform "$PLATFORM" -f Dockerfile.test -t "$IMAGE" .
 
 echo ""
