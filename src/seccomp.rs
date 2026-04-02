@@ -190,7 +190,7 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
     allow(&mut rules, libc::SYS_gettid); // V8 needs for thread-local ops
     #[cfg(target_arch = "x86_64")]
     allow(&mut rules, libc::SYS_arch_prctl); // x86_64 TLS setup
-    allow_prlimit64_readonly(&mut rules); // V8 checks resource limits (read-only)
+    // prlimit64: BLOCKED — V8 checks resource limits at init only
     // getrandom: BLOCKED — V8/tokio seed their RNGs during init before seccomp
     #[cfg(target_arch = "aarch64")]
     allow(&mut rules, 172); // getresgid on aarch64
@@ -298,23 +298,6 @@ fn allow_sigaction_protect_sigsys(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
     rules.insert(libc::SYS_rt_sigaction, vec![rule]);
 }
 
-/// Allow prlimit64 only for reading limits (new_limit must be NULL)
-#[cfg(target_os = "linux")]
-fn allow_prlimit64_readonly(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
-    // prlimit64(pid, resource, new_limit, old_limit) - new_limit is arg2
-    // Allow only when new_limit == NULL (0), i.e. read-only queries.
-    // Block setting limits which could be used for DoS or side-channels.
-    let rule = SeccompRule::new(vec![SeccompCondition::new(
-        2, // new_limit argument
-        SeccompCmpArgLen::Qword,
-        SeccompCmpOp::Eq,
-        0, // must be NULL
-    )
-    .expect("valid condition")])
-    .expect("valid rule");
-
-    rules.insert(libc::SYS_prlimit64, vec![rule]);
-}
 
 /// Allow only safe fcntl operations (block F_SETOWN, F_SETSIG, etc.)
 #[cfg(target_os = "linux")]
