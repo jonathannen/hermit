@@ -136,7 +136,7 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
     allow(&mut rules, libc::SYS_write);
 
     // These must remain unrestricted for V8/tokio internals
-    allow_safe_ioctl(&mut rules); // ioctl restricted to safe terminal ops
+    // ioctl: BLOCKED entirely — no terminal or device ops needed post-init
     // fstat: BLOCKED — V8 init is done before seccomp; no runtime need expected
     allow(&mut rules, libc::SYS_close);
     allow_safe_fcntl(&mut rules);
@@ -398,47 +398,6 @@ fn allow_mmap_private_only(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
     rules.insert(libc::SYS_mmap, vec![rule]);
 }
 
-/// Allow only safe ioctl operations (block TIOCSTI terminal injection, etc.)
-#[cfg(target_os = "linux")]
-fn allow_safe_ioctl(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
-    // ioctl(fd, request, ...) - request is arg1
-    // Allow specific safe terminal ioctls, block dangerous ones like TIOCSTI
-    //
-    // Safe ioctls we allow:
-    // - TCGETS (0x5401) - get terminal attributes
-    // - TIOCGWINSZ (0x5413) - get window size
-    // - FIONREAD (0x541B) - bytes available to read
-    // - FIONBIO (0x5421) - set non-blocking (tokio needs this)
-    //
-    // Dangerous ioctls we block:
-    // - TIOCSTI (0x5412) - simulate terminal input (injection attack)
-    // - TIOCSWINSZ (0x5414) - could confuse terminal apps
-    // - TIOCLINUX (0x541C) - various dangerous terminal ops
-
-    const TCGETS: u64 = 0x5401;
-    const TIOCGWINSZ: u64 = 0x5413;
-    const FIONREAD: u64 = 0x541B;
-    const FIONBIO: u64 = 0x5421;
-
-    // Allow each safe ioctl (OR'd rules)
-    let ioctl_rules = vec![
-        // Terminal ioctls
-        SeccompRule::new(vec![SeccompCondition::new(1, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, TCGETS)
-            .expect("valid")])
-        .expect("valid"),
-        SeccompRule::new(vec![SeccompCondition::new(1, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, TIOCGWINSZ)
-            .expect("valid")])
-        .expect("valid"),
-        SeccompRule::new(vec![SeccompCondition::new(1, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, FIONREAD)
-            .expect("valid")])
-        .expect("valid"),
-        SeccompRule::new(vec![SeccompCondition::new(1, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, FIONBIO)
-            .expect("valid")])
-        .expect("valid"),
-    ];
-
-    rules.insert(libc::SYS_ioctl, ioctl_rules);
-}
 
 /// Allow openat only for read-only opens (block write, create, truncate, append)
 #[cfg(target_os = "linux")]
