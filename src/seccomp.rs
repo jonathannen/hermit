@@ -208,7 +208,7 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_arch = "x86_64")]
     allow(&mut rules, libc::SYS_epoll_wait);
     allow(&mut rules, libc::SYS_epoll_pwait);
-    allow(&mut rules, libc::SYS_epoll_pwait2);
+    // epoll_pwait2: BLOCKED — tokio uses epoll_pwait, not the newer pwait2
     // eventfd2: BLOCKED — tokio creates its eventfds during init
 
     // === EXPLICITLY BLOCKED (tripwires) ===
