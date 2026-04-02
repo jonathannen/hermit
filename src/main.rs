@@ -1,5 +1,6 @@
 mod ops;
 mod runtime;
+mod sandbox;
 mod seccomp;
 
 use std::fmt;
@@ -219,6 +220,11 @@ fn main() {
     // may have accidentally left open (database connections, sockets, etc.).
     close_inherited_fds();
 
+    // Mount namespace: pivot to a minimal filesystem with only /proc, /sys/cpu,
+    // and /dev/urandom. Must happen before threads are created (unshare requirement).
+    // Falls back gracefully if user namespaces are disabled.
+    sandbox::enter_mount_namespace();
+
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -338,8 +344,11 @@ async fn run(
     js_runtime.execute_script("<warmup>", "1".to_string())?;
     js_runtime.run_event_loop(Default::default()).await?;
 
-    // Install stage-2 seccomp filter: only write, futex, mmap, munmap, madvise,
-    // mprotect (JIT only), exit. No file access, no thread creation, no networking.
+    // Strip non-essential filesystem mounts (/dev/urandom, /sys) now that V8
+    // initialization is complete. Only /proc remains for thread creation.
+    sandbox::strip_filesystem();
+
+    // Install stage-2 seccomp filter.
     seccomp::install_stage2(allow_jit).map_err(|e| {
         deno_error::JsErrorBox::new("Error", format!("failed to install stage-2 seccomp: {}", e))
     })?;

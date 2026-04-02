@@ -200,6 +200,9 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
     // prctl restricted to safe operations (thread naming needed for clone(2) fallback)
     allow_safe_prctl(&mut rules);
 
+    // umount2 needed for strip_filesystem() after warmup (before stage-2)
+    allow(&mut rules, libc::SYS_umount2);
+
     // seccomp(2) must be allowed so stage-2 filter can be installed later.
     // Stage-2 does NOT include seccomp in its allowlist, so after stage-2
     // is installed, seccomp is blocked by the stacked filter combination.
