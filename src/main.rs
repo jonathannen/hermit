@@ -58,8 +58,10 @@ fn parse_timeout(s: &str) -> Result<Duration, InvalidDuration> {
     num_str
         .trim()
         .parse::<u64>()
-        .map(|n| Duration::from_millis(n * multiplier))
-        .map_err(|_| InvalidDuration(s))
+        .ok()
+        .and_then(|n| n.checked_mul(multiplier))
+        .map(Duration::from_millis)
+        .ok_or_else(|| InvalidDuration(s))
 }
 
 /// Watchdog that kills the process if an eval exceeds the timeout.
@@ -136,8 +138,9 @@ fn parse_memory_limit(s: &str) -> Result<usize, InvalidMemoryLimit> {
     num_str
         .trim()
         .parse::<usize>()
-        .map(|n| n * multiplier)
-        .map_err(|_| InvalidMemoryLimit(s))
+        .ok()
+        .and_then(|n| n.checked_mul(multiplier))
+        .ok_or_else(|| InvalidMemoryLimit(s))
 }
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
