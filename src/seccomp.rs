@@ -139,7 +139,7 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
     // ioctl: BLOCKED entirely — no terminal or device ops needed post-init
     // fstat: BLOCKED — V8 init is done before seccomp; no runtime need expected
     allow(&mut rules, libc::SYS_close);
-    allow_safe_fcntl(&mut rules);
+    // fcntl: BLOCKED entirely — fd flags are set during init
     allow_openat_readonly(&mut rules); // openat restricted to read-only
 
     // Memory management (V8 JIT requires these)
@@ -298,46 +298,6 @@ fn allow_sigaction_protect_sigsys(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
     rules.insert(libc::SYS_rt_sigaction, vec![rule]);
 }
 
-
-/// Allow only safe fcntl operations (block F_SETOWN, F_SETSIG, etc.)
-#[cfg(target_os = "linux")]
-fn allow_safe_fcntl(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
-    // fcntl(fd, cmd, ...) - cmd is arg1
-    //
-    // Safe ops we allow:
-    // - F_GETFD (1) - get close-on-exec flag
-    // - F_SETFD (2) - set close-on-exec flag
-    // - F_GETFL (3) - get file status flags
-    // - F_DUPFD_CLOEXEC (1030) - dup with close-on-exec (V8/tokio uses this)
-    //
-    // Dangerous ops we block:
-    // - F_SETOWN (8) - redirect SIGIO/SIGURG to arbitrary pid
-    // - F_SETSIG (10) - change signal delivered on I/O events
-    // - F_SETFL (4) - could add O_APPEND to corrupt logs
-    // - F_SETLK/F_SETLKW (6,7) - file locking (not needed)
-
-    const F_GETFD: u64 = 1;
-    const F_SETFD: u64 = 2;
-    const F_GETFL: u64 = 3;
-    const F_DUPFD_CLOEXEC: u64 = 1030;
-
-    let fcntl_rules = vec![
-        SeccompRule::new(vec![SeccompCondition::new(1, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, F_GETFD)
-            .expect("valid")])
-        .expect("valid"),
-        SeccompRule::new(vec![SeccompCondition::new(1, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, F_SETFD)
-            .expect("valid")])
-        .expect("valid"),
-        SeccompRule::new(vec![SeccompCondition::new(1, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, F_GETFL)
-            .expect("valid")])
-        .expect("valid"),
-        SeccompRule::new(vec![SeccompCondition::new(1, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, F_DUPFD_CLOEXEC)
-            .expect("valid")])
-        .expect("valid"),
-    ];
-
-    rules.insert(libc::SYS_fcntl, fcntl_rules);
-}
 
 /// Block mprotect with PROT_EXEC (prevent making pages executable post-init)
 #[cfg(target_os = "linux")]
