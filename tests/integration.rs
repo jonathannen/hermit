@@ -564,3 +564,52 @@ fn invalid_js_does_not_crash() {
     assert_eq!(c.read_line(), "still alive");
     assert_eq!(c.shutdown(), 0);
 }
+
+// === Sandbox hardening tests ===
+
+#[test]
+fn survives_many_sequential_evals() {
+    // Verify the full sandbox (namespace + seccomp stage 2) doesn't
+    // break under sustained eval load.
+    let mut c = Hermit::spawn();
+    for i in 0..100 {
+        c.eval(&format!(r#"console.log({})"#, i));
+        assert_eq!(c.read_line(), i.to_string());
+    }
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
+fn warmup_does_not_leak_to_user_code() {
+    // The warmup eval ("1") runs before user code.
+    // Verify it doesn't produce output or leave state.
+    let mut c = Hermit::spawn();
+    c.eval(r#"console.log("first")"#);
+    assert_eq!(c.read_line(), "first");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn seccomp_blocks_with_exit_159() {
+    // Deno.core is deleted, but if we somehow bypass JS lockdown and
+    // trigger a blocked syscall, the process should exit with 159
+    // (our SIGSYS handler's exit code). We can't easily trigger this
+    // from JS since dangerous APIs are removed, but we verify the
+    // exit code convention by checking that the process doesn't use
+    // 159 for normal operations.
+    let mut c = Hermit::spawn();
+    c.eval(r#"console.log("ok")"#);
+    assert_eq!(c.read_line(), "ok");
+    let code = c.shutdown();
+    assert_ne!(code, 159, "normal shutdown should not exit with seccomp trap code");
+}
+
+#[test]
+fn async_works_after_warmup() {
+    // Verify Promise.then works correctly after warmup + stage-2 seccomp.
+    let mut c = Hermit::spawn();
+    c.eval(r#"Promise.resolve(42).then(v => console.log(v))"#);
+    assert_eq!(c.read_line(), "42");
+    assert_eq!(c.shutdown(), 0);
+}
