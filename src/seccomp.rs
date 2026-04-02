@@ -192,7 +192,7 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_arch = "x86_64")]
     allow(&mut rules, libc::SYS_arch_prctl); // x86_64 TLS setup
     allow_prlimit64_readonly(&mut rules); // V8 checks resource limits (read-only)
-    allow(&mut rules, libc::SYS_getrandom); // V8/tokio needs for initialization
+    // getrandom: BLOCKED — V8/tokio seed their RNGs during init before seccomp
     #[cfg(target_arch = "aarch64")]
     allow(&mut rules, 172); // getresgid on aarch64
 
