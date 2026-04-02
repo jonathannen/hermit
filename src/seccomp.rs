@@ -143,7 +143,7 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
     allow_openat_readonly(&mut rules); // openat restricted to read-only
 
     // Memory management (V8 JIT requires these)
-    allow(&mut rules, libc::SYS_mmap);
+    allow_mmap_private_only(&mut rules); // mmap restricted: no MAP_SHARED
     allow(&mut rules, libc::SYS_munmap);
     if allow_jit {
         allow(&mut rules, libc::SYS_mprotect);
@@ -376,6 +376,26 @@ fn allow_mprotect_noexec(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
     .expect("valid rule");
 
     rules.insert(libc::SYS_mprotect, vec![rule]);
+}
+
+/// Allow mmap but block MAP_SHARED (prevent shared memory IPC / side-channels)
+#[cfg(target_os = "linux")]
+fn allow_mmap_private_only(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
+    // mmap(addr, length, prot, flags, fd, offset) - flags is arg3
+    // MAP_SHARED = 0x01. Block any mmap where MAP_SHARED is set.
+    // V8 only needs MAP_PRIVATE | MAP_ANONYMOUS for heap and JIT pages.
+    const MAP_SHARED: u64 = 0x01;
+
+    let rule = SeccompRule::new(vec![SeccompCondition::new(
+        3, // flags argument
+        SeccompCmpArgLen::Dword,
+        SeccompCmpOp::MaskedEq(MAP_SHARED),
+        0, // MAP_SHARED must not be set
+    )
+    .expect("valid condition")])
+    .expect("valid rule");
+
+    rules.insert(libc::SYS_mmap, vec![rule]);
 }
 
 /// Allow only safe ioctl operations (block TIOCSTI terminal injection, etc.)
