@@ -12,6 +12,29 @@ use tokio::sync::mpsc;
 
 const DEFAULT_MEMORY_LIMIT: usize = 128 * 1024 * 1024; // 128MB
 
+/// Close all file descriptors above stderr (fd > 2).
+/// Must be called before creating the tokio runtime or V8 isolate.
+fn close_inherited_fds() {
+    // Read /proc/self/fd to find open FDs (Linux).
+    // On non-Linux, fall back to closing a reasonable range.
+    let fds: Vec<i32> = if let Ok(entries) = std::fs::read_dir("/proc/self/fd") {
+        entries
+            .filter_map(|e| e.ok())
+            .filter_map(|e| e.file_name().to_str()?.parse::<i32>().ok())
+            .filter(|&fd| fd > 2)
+            .collect()
+    } else {
+        // Fallback: close fds 3..1024 (covers typical inherited FDs)
+        (3..1024).collect()
+    };
+
+    for fd in fds {
+        // SAFETY: closing unknown FDs is safe — close on an invalid/already-closed FD
+        // returns EBADF which we ignore. This runs before any Rust I/O beyond stdio.
+        unsafe { libc::close(fd); }
+    }
+}
+
 #[derive(Debug)]
 struct InvalidDuration(String);
 
@@ -187,6 +210,11 @@ fn main() {
             }
         }
     }
+
+    // FD hygiene: close all inherited file descriptors except stdin/stdout/stderr.
+    // This prevents a post-escape attacker from interacting with FDs the parent
+    // may have accidentally left open (database connections, sockets, etc.).
+    close_inherited_fds();
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
