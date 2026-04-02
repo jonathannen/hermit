@@ -201,7 +201,7 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
 
     // Poll/epoll for tokio
     // epoll_create1: BLOCKED — tokio creates its epoll fd during init
-    allow(&mut rules, libc::SYS_epoll_ctl);
+    // epoll_ctl: BLOCKED — tokio event registrations completed during init
     // epoll_wait only exists on x86_64, aarch64 uses epoll_pwait
     #[cfg(target_arch = "x86_64")]
     allow(&mut rules, libc::SYS_epoll_wait);
