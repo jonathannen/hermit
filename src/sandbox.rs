@@ -75,7 +75,7 @@ fn try_enter_mount_namespace() -> Result<(), Box<dyn std::error::Error>> {
     // 3. Make all existing mounts private (prevent propagation)
     // SAFETY: mount with MS_REC|MS_PRIVATE on "/" affects mount propagation only.
     let none = std::ptr::null();
-    let root = b"/\0".as_ptr() as *const libc::c_char;
+    let root = c"/".as_ptr();
     let ret = unsafe {
         libc::mount(none, root, none, libc::MS_REC | libc::MS_PRIVATE, none as *const libc::c_void)
     };
@@ -88,7 +88,7 @@ fn try_enter_mount_namespace() -> Result<(), Box<dyn std::error::Error>> {
     let new_root_path = std::path::Path::new("/tmp/hermit-root");
     fs::create_dir_all(new_root_path)?;
 
-    let tmpfs = b"tmpfs\0".as_ptr() as *const libc::c_char;
+    let tmpfs = c"tmpfs".as_ptr();
     let new_root_cstr = new_root.as_ptr() as *const libc::c_char;
     // SAFETY: mount creates a tmpfs at the target path.
     let ret = unsafe {
@@ -169,7 +169,7 @@ fn try_enter_mount_namespace() -> Result<(), Box<dyn std::error::Error>> {
 
     // 8. chdir to / in the new root
     // SAFETY: chdir to a valid path.
-    unsafe { libc::chdir(b"/\0".as_ptr() as *const libc::c_char); }
+    unsafe { libc::chdir(c"/".as_ptr()); }
 
     Ok(())
 }

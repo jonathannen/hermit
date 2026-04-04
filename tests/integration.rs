@@ -70,7 +70,19 @@ impl Hermit {
 
     fn shutdown(mut self) -> i32 {
         drop(self.stdin);
-        self.child.wait().unwrap().code().unwrap_or(-1)
+        let status = self.child.wait().unwrap();
+        if let Some(code) = status.code() {
+            return code;
+        }
+        // Killed by signal — map to 128 + signal (standard shell convention)
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            if let Some(sig) = status.signal() {
+                return 128 + sig;
+            }
+        }
+        -1
     }
 }
 
@@ -344,7 +356,7 @@ fn microtask_flood_is_contained() {
     // Should eventually OOM or error, not hang forever
     // (microtask queue grows unboundedly, hitting heap limit)
     let code = c.shutdown();
-    assert!(code == 137 || code == 0);
+    assert!(code == 137 || code == 0, "unexpected exit code: {}", code);
 }
 
 #[test]
