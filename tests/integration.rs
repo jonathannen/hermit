@@ -21,6 +21,12 @@ impl Hermit {
             cmd.arg("--jit");
         }
 
+        // CI runners often lack user namespaces; default to --permissive
+        // unless the test explicitly passes --strict.
+        if !extra_args.contains(&"--strict") {
+            cmd.arg("--permissive");
+        }
+
         cmd.args(extra_args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
