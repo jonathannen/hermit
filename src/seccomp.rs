@@ -195,7 +195,8 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_arch = "aarch64")]
     allow(&mut rules, 172); // getresgid on aarch64
 
-    // clock_nanosleep: BLOCKED — V8 GC shouldn't need sleep post-init
+    // clock_nanosleep: V8 GC helper threads use this for backoff between cycles
+    allow(&mut rules, libc::SYS_clock_nanosleep);
 
     // prctl restricted to safe operations (thread naming needed for clone(2) fallback)
     allow_safe_prctl(&mut rules);
@@ -326,6 +327,7 @@ pub fn install_stage2(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>>
     allow(&mut rules, libc::SYS_sched_getparam);
     allow(&mut rules, libc::SYS_sched_getscheduler);
     allow(&mut rules, libc::SYS_sched_yield);
+    allow(&mut rules, libc::SYS_clock_nanosleep); // V8 GC helper thread backoff
     allow(&mut rules, libc::SYS_gettid);
     allow(&mut rules, libc::SYS_sigaltstack);
     // prctl restricted to safe operations (thread naming)

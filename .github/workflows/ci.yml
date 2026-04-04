@@ -45,7 +45,7 @@ jobs:
         run: |
           for i in $(seq 1 20); do
             echo "=== Run $i/20 ==="
-            cargo test --release -- --test-threads=4
+            cargo test --release
           done
 
   clippy:
