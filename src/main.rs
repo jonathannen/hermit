@@ -62,7 +62,7 @@ fn parse_timeout(s: &str) -> Result<Duration, InvalidDuration> {
         .ok()
         .and_then(|n| n.checked_mul(multiplier))
         .map(Duration::from_millis)
-        .ok_or_else(|| InvalidDuration(s))
+        .ok_or(InvalidDuration(s))
 }
 
 /// Watchdog that kills the process if an eval exceeds the timeout.
@@ -141,12 +141,21 @@ fn parse_memory_limit(s: &str) -> Result<usize, InvalidMemoryLimit> {
         .parse::<usize>()
         .ok()
         .and_then(|n| n.checked_mul(multiplier))
-        .ok_or_else(|| InvalidMemoryLimit(s))
+        .ok_or(InvalidMemoryLimit(s))
 }
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+fn default_sandbox_mode() -> sandbox::SandboxMode {
+    if cfg!(target_os = "linux") {
+        sandbox::SandboxMode::Strict
+    } else {
+        sandbox::SandboxMode::Permissive
+    }
+}
+
 fn print_usage() {
+    let default_mode = if cfg!(target_os = "linux") { "strict" } else { "permissive" };
     eprintln!("Usage: hermit [--memory-limit <size>] [--timeout <duration>] [--jit]");
     eprintln!();
     eprintln!("Options:");
@@ -157,6 +166,9 @@ fn print_usage() {
     eprintln!("  --timeout <duration>   Max wall-clock time per eval block (default: none)");
     eprintln!("                         Kills process on timeout (exit code 142).");
     eprintln!("                         Examples: 5s, 500ms, 30s");
+    eprintln!("  --strict               Fail if mount namespace cannot be created (default on Linux)");
+    eprintln!("  --permissive           Warn and continue without namespace isolation (default on macOS)");
+    eprintln!("                         Current default: --{}", default_mode);
     eprintln!("  --version, -V          Print version");
 }
 
@@ -164,6 +176,7 @@ fn main() {
     let mut memory_limit = DEFAULT_MEMORY_LIMIT;
     let mut allow_jit = false;
     let mut timeout: Option<Duration> = None;
+    let mut sandbox_mode = default_sandbox_mode();
     let mut args = std::env::args().skip(1);
 
     while let Some(arg) = args.next() {
@@ -199,6 +212,12 @@ fn main() {
                     }
                 });
             }
+            "--strict" => {
+                sandbox_mode = sandbox::SandboxMode::Strict;
+            }
+            "--permissive" => {
+                sandbox_mode = sandbox::SandboxMode::Permissive;
+            }
             "--help" | "-h" => {
                 print_usage();
                 std::process::exit(0);
@@ -222,8 +241,8 @@ fn main() {
 
     // Mount namespace: pivot to a minimal filesystem with only /proc, /sys/cpu,
     // and /dev/urandom. Must happen before threads are created (unshare requirement).
-    // Falls back gracefully if user namespaces are disabled.
-    sandbox::enter_mount_namespace();
+    // In strict mode, failure is fatal. In permissive mode, warns and continues.
+    sandbox::enter_mount_namespace(sandbox_mode);
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

@@ -10,14 +10,33 @@
 //! Requires: single-threaded process (no tokio/V8 yet), Linux with user
 //! namespaces enabled (most modern kernels).
 
+/// Controls whether mount namespace failure is fatal or best-effort.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SandboxMode {
+    /// Namespace failure is fatal — the process exits.
+    Strict,
+    /// Namespace failure prints a warning and continues.
+    Permissive,
+}
+
 /// Set up mount namespace isolation. Must be called before any threads are created.
 ///
-/// On failure (e.g. user namespaces disabled), prints a warning to stderr and
-/// continues without namespace isolation — seccomp still provides defense.
+/// In `Strict` mode, failure is fatal (exit code 1).
+/// In `Permissive` mode, failure prints a warning and continues — seccomp
+/// still provides defense.
 #[cfg(target_os = "linux")]
-pub fn enter_mount_namespace() {
+pub fn enter_mount_namespace(mode: SandboxMode) {
     if let Err(e) = try_enter_mount_namespace() {
-        eprintln!("warning: mount namespace setup failed ({}), continuing without filesystem isolation", e);
+        match mode {
+            SandboxMode::Strict => {
+                eprintln!("fatal: mount namespace setup failed ({})", e);
+                eprintln!("hint: use --permissive to continue without filesystem isolation");
+                std::process::exit(1);
+            }
+            SandboxMode::Permissive => {
+                eprintln!("warning: mount namespace setup failed ({}), continuing without filesystem isolation", e);
+            }
+        }
     }
 }
 
@@ -170,8 +189,8 @@ pub fn strip_filesystem() {
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn enter_mount_namespace() {
-    // Mount namespaces are Linux-only
+pub fn enter_mount_namespace(_mode: SandboxMode) {
+    // Mount namespaces are Linux-only; permissive is the only sensible default.
 }
 
 #[cfg(not(target_os = "linux"))]
