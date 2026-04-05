@@ -78,6 +78,19 @@
   _freeze(Object.getPrototypeOf(genFunc));
   _freeze(Object.getPrototypeOf(asyncGenFunc));
 
+  // Freeze prototypes reachable through literals/builtins despite constructor deletion.
+  // Without these, sandbox code can pollute prototypes across eval blocks.
+  _freeze(RegExp.prototype);                                         // /foo/.constructor.prototype
+  _freeze(Symbol.prototype);                                         // recoverable via getOwnPropertySymbols
+  const _arrIter = [].values();
+  const _ArrayIteratorProto = Object.getPrototypeOf(_arrIter);
+  const _IteratorProto = Object.getPrototypeOf(_ArrayIteratorProto);
+  _freeze(_ArrayIteratorProto);                                      // [].values().__proto__
+  _freeze(_IteratorProto);                                           // IteratorPrototype (parent of all iterators)
+  _freeze(Object.getPrototypeOf(new _Map().values()));               // MapIteratorPrototype
+  _freeze(Object.getPrototypeOf(new _Set().values()));               // SetIteratorPrototype
+  _freeze(Object.getPrototypeOf(""[Symbol.iterator]()));             // StringIteratorPrototype
+
   // Delete dangerous globals
   delete current.Deno;
   delete current.Date;
