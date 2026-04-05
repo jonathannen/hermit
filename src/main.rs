@@ -39,6 +39,16 @@ fn close_inherited_fds() {
     }
 }
 
+/// Clear all environment variables to prevent leaking host secrets.
+/// Must be called before V8 init (V8 may read env vars during setup).
+fn clear_env() {
+    let keys: Vec<_> = std::env::vars_os().map(|(k, _)| k).collect();
+    for key in keys {
+        // SAFETY: called before any threads are created (single-threaded at this point).
+        unsafe { std::env::remove_var(key); }
+    }
+}
+
 #[derive(Debug)]
 struct InvalidDuration(String);
 
@@ -246,6 +256,12 @@ fn main() {
     // This prevents a post-escape attacker from interacting with FDs the parent
     // may have accidentally left open (database connections, sockets, etc.).
     close_inherited_fds();
+
+    // Clear all environment variables. Even though JS can't access process.env,
+    // a post-V8-escape attacker could read them from /proc/self/environ (if
+    // mounted) or via libc getenv. Belt-and-suspenders with mount namespace
+    // which doesn't mount /proc/self/environ.
+    clear_env();
 
     // Mount namespace: pivot to a minimal filesystem with only /proc, /sys/cpu,
     // and /dev/urandom. Must happen before threads are created (unshare requirement).
