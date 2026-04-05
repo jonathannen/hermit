@@ -632,6 +632,59 @@ fn seccomp_blocks_with_exit_159() {
 }
 
 #[test]
+fn typed_array_and_arraybuffer_inaccessible() {
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        const types = [
+            "ArrayBuffer", "DataView", "Int8Array", "Uint8Array",
+            "Uint8ClampedArray", "Int16Array", "Uint16Array",
+            "Int32Array", "Uint32Array", "Float32Array", "Float64Array",
+            "BigInt64Array", "BigUint64Array", "SharedArrayBuffer"
+        ];
+        const results = types.map(t => typeof globalThis[t]);
+        console.log(results.every(r => r === "undefined") ? "OK" : "FAIL: " + results.join(","));
+    "#,
+    );
+    assert_eq!(c.read_line(), "OK");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
+fn proxy_reflect_inaccessible() {
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        console.log(typeof Proxy);
+        console.log(typeof Reflect);
+    "#,
+    );
+    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
+fn timing_primitives_inaccessible() {
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        console.log(typeof Date);
+        console.log(typeof performance);
+        console.log(typeof setTimeout);
+        console.log(typeof setInterval);
+        console.log(typeof queueMicrotask);
+    "#,
+    );
+    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
 fn async_works_after_warmup() {
     // Verify Promise.then works correctly after warmup + stage-2 seccomp.
     let mut c = Hermit::spawn();
