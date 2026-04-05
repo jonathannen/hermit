@@ -31,6 +31,20 @@
   const _SetConstructor = Set;
   const _setAdd = Set.prototype.add;
   const _setHas = Set.prototype.has;
+  const _objToString = Object.prototype.toString;
+
+  // Safe serializer that never invokes attacker-controlled toString/valueOf.
+  // Handles primitives directly; objects get the tamper-proof [object Tag] form.
+  function safeString(val) {
+    if (val === undefined) return "undefined";
+    if (val === null) return "null";
+    const t = typeof val;
+    if (t === "string") return val;
+    if (t === "number" || t === "boolean" || t === "bigint") return "" + val;
+    // For objects/functions, use the captured Object.prototype.toString to
+    // avoid calling any user-defined toString/valueOf/Symbol.toPrimitive.
+    return _objToString.call(val);
+  }
 
   // Transitive deep freeze: walk the entire reachable object graph from `root`
   // and freeze every object/function found. Uses a visited set to handle cycles.
@@ -147,7 +161,7 @@
 
   // Install console.log (the only output primitive)
   const console = _freeze({
-    log: (...args) => log(args.map(_String).join(" "))
+    log: (...args) => log(args.map(safeString).join(" "))
   });
   _defineProperty(current, "console", {
     value: console, writable: false, configurable: false

@@ -515,6 +515,9 @@ fn malicious_tojson_and_tostring_contained() {
         console.log("survived");
     "#,
     );
+    // safeString bypasses toString entirely — both objects output [object Object]
+    assert_eq!(c.read_line(), "[object Object]");
+    assert_eq!(c.read_line(), "[object Object]");
     assert_eq!(c.read_line(), "survived");
     assert_eq!(c.shutdown(), 0);
 }
@@ -762,7 +765,7 @@ fn console_log_non_string_types() {
     assert_eq!(c.read_line(), "true");
     assert_eq!(c.read_line(), "12345");
     assert_eq!(c.read_line(), "[object Object]");
-    assert_eq!(c.read_line(), "1,2,3");
+    assert_eq!(c.read_line(), "[object Array]"); // safeString avoids attacker-controlled toString
     assert_eq!(c.read_line(), "1 two null");
     assert_eq!(c.shutdown(), 0);
 }
