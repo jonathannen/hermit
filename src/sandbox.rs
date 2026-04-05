@@ -99,11 +99,18 @@ fn try_enter_mount_namespace() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // 5. Bind-mount only the paths V8 needs during initialization:
-    //    - /proc (for /proc/self/maps, /proc/self/status, /proc/self/fd)
+    //    - /proc/self/maps (V8 reads memory layout)
+    //    - /proc/self/status (V8 reads process info, rlimit reads thread count)
+    //    - /proc/self/fd (FD hygiene close_inherited_fds)
     //    - /sys/devices/system/cpu (for CPU topology)
     //    - /dev/urandom (for entropy)
+    //
+    //    Sensitive /proc files (environ, cmdline, mountinfo) are NOT mounted,
+    //    preventing a post-V8-escape attacker from reading host secrets.
     let binds: &[(&str, &str)] = &[
-        ("/proc", "/tmp/hermit-root/proc"),
+        ("/proc/self/maps", "/tmp/hermit-root/proc/self/maps"),
+        ("/proc/self/status", "/tmp/hermit-root/proc/self/status"),
+        ("/proc/self/fd", "/tmp/hermit-root/proc/self/fd"),
         ("/sys/devices/system/cpu", "/tmp/hermit-root/sys/devices/system/cpu"),
         ("/dev/urandom", "/tmp/hermit-root/dev/urandom"),
     ];
@@ -174,8 +181,10 @@ fn try_enter_mount_namespace() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Unmount bind-mounts after V8 warmup, leaving an empty filesystem.
-/// After this, only /proc remains (needed for thread creation via /proc/self).
+/// Unmount bind-mounts after V8 warmup, leaving a minimal filesystem.
+/// Only /proc/self/maps, /proc/self/status, and /proc/self/fd remain
+/// (needed for V8 GC thread creation). Sensitive files like environ
+/// and cmdline were never mounted.
 #[cfg(target_os = "linux")]
 pub fn strip_filesystem() {
     // Unmount /dev/urandom and /sys — no longer needed after V8 init

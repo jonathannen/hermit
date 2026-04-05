@@ -12,6 +12,16 @@ The typical pattern is to send JavaScript wrapped in a protocol handler, then in
 
 On Linux, Hermit layers multiple OS-level sandboxing mechanisms on top of V8's isolate. There is a Mac build for local development only.
 
+## Why
+
+As part of [alpyne.dev](http://alpyne.dev) I wanted to be able to run untrusted JavaScript code against a well-defined set of interfaces. A plugin is the best natural example of this in the wild.
+
+There are already tools that help on the untrusted side, but they were either too heavy or required a bunch of plumbing to work. In my case I just want to run JavaScript.
+
+Hermit gives you the primitives to do this. You've given a vary narrow window - stdio message passing. On top of this you can construct any protocol you like.
+
+On Linux, Hermit layers mount namespaces, two-stage seccomp, and rlimits on top of V8's process-level isolation. It's a single binary with no runtime dependencies.
+
 ## Example
 
 The most trivial example executes JavaScript directly.
@@ -29,7 +39,9 @@ printf 'const greet = (name) => console.log("hello " + name);\n\ngreet("world");
 # hello world
 ```
 
-See `examples` and `tests/fixtures` for other examples. You can also substitute `hermit` for `cargo run`.
+This is the most basic primitive to build off. From here you can create much richer interfaces. See `examples` and `tests/fixtures` for other examples.
+
+Note: You can also substitute `hermit` for `cargo run` as you like.
 
 ## Security Layers
 

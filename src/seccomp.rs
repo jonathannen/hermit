@@ -36,19 +36,19 @@ fn apply_prctl_restrictions() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Convert integer to string in stack buffer (signal-safe, no allocations)
 #[cfg(target_os = "linux")]
-fn itoa(mut n: i32, buf: &mut [u8]) -> usize {
+fn itoa(n: i32, buf: &mut [u8]) -> usize {
     if n == 0 {
         buf[0] = b'0';
         return 1;
     }
+    // Work with negative values to avoid overflow on i32::MIN.
+    // -i32::MIN overflows, but i32::MIN itself is representable as negative.
     let negative = n < 0;
-    if negative {
-        n = -n;
-    }
+    let mut val = if negative { n } else { -n }; // val is always <= 0
     let mut i = 0;
-    while n > 0 && i < buf.len() {
-        buf[i] = b'0' + (n % 10) as u8;
-        n /= 10;
+    while val < 0 && i < buf.len() {
+        buf[i] = b'0' + (-(val % 10)) as u8; // -(val % 10) is in 0..=9
+        val /= 10;
         i += 1;
     }
     if negative && i < buf.len() {
@@ -427,7 +427,6 @@ fn allow_sigaction_protect_sigsys(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
 
     rules.insert(libc::SYS_rt_sigaction, vec![rule]);
 }
-
 
 /// Block mprotect with PROT_EXEC (prevent making pages executable post-init)
 #[cfg(target_os = "linux")]

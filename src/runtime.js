@@ -8,15 +8,19 @@
   const _Array = Array;
   const _Boolean = Boolean;
   const _Error = Error;
+  const _EvalError = EvalError;
   const _JSON = JSON;
   const _Map = Map;
   const _Number = Number;
   const _Object = Object;
   const _Promise = Promise;
   const _RangeError = RangeError;
+  const _ReferenceError = ReferenceError;
   const _Set = Set;
   const _String = String;
+  const _SyntaxError = SyntaxError;
   const _TypeError = TypeError;
+  const _URIError = URIError;
   const _defineProperty = Object.defineProperty;
   const _freeze = Object.freeze;
 
@@ -53,18 +57,22 @@
     writable: false
   });
 
-  // Freeze prototypes
+  // Freeze prototypes (all Error subclasses included to prevent prototype pollution)
   _freeze(_Array.prototype);
   _freeze(_Boolean.prototype);
   _freeze(_Error.prototype);
+  _freeze(_EvalError.prototype);
   _freeze(_Map.prototype);
   _freeze(_Number.prototype);
   _freeze(_Object.prototype);
   _freeze(_Promise.prototype);
   _freeze(_RangeError.prototype);
+  _freeze(_ReferenceError.prototype);
   _freeze(_Set.prototype);
   _freeze(_String.prototype);
+  _freeze(_SyntaxError.prototype);
   _freeze(_TypeError.prototype);
+  _freeze(_URIError.prototype);
   _freeze(Object.getPrototypeOf(syncFunc));
   _freeze(Object.getPrototypeOf(asyncFunc));
   _freeze(Object.getPrototypeOf(genFunc));
