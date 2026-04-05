@@ -302,8 +302,8 @@ fn apply_rlimits() {
 
 const MAX_BLOCK_SIZE: usize = 64 * 1024 * 1024; // 64MB
 
-fn spawn_stdin_reader() -> mpsc::UnboundedReceiver<String> {
-    let (tx, rx) = mpsc::unbounded_channel();
+fn spawn_stdin_reader() -> mpsc::Receiver<String> {
+    let (tx, rx) = mpsc::channel(16);
     std::thread::spawn(move || {
         let stdin = std::io::stdin();
         let mut reader = std::io::BufReader::new(stdin.lock());
@@ -335,7 +335,7 @@ fn spawn_stdin_reader() -> mpsc::UnboundedReceiver<String> {
                     let code = buffer.join("\n");
                     buffer.clear();
                     buffer_size = 0;
-                    if tx.send(code).is_err() {
+                    if tx.blocking_send(code).is_err() {
                         break;
                     }
                 }
@@ -351,7 +351,7 @@ fn spawn_stdin_reader() -> mpsc::UnboundedReceiver<String> {
         // Flush any remaining buffered code on EOF
         if !buffer.is_empty() {
             let code = buffer.join("\n");
-            let _ = tx.send(code);
+            let _ = tx.blocking_send(code);
         }
     });
     rx
