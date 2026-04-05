@@ -25,8 +25,11 @@ fn close_inherited_fds() {
             .filter(|&fd| fd > 2)
             .collect()
     } else {
-        // Fallback: close fds 3..1024 (covers typical inherited FDs)
-        (3..1024).collect()
+        // Fallback: close fds 3..max. Use sysconf to find the real upper bound
+        // so we don't miss high-numbered inherited FDs.
+        let max_fd = unsafe { libc::sysconf(libc::_SC_OPEN_MAX) };
+        let max_fd = if max_fd > 0 { max_fd as i32 } else { 65536 };
+        (3..max_fd).collect()
     };
 
     for fd in fds {
