@@ -520,6 +520,214 @@ fn malicious_tojson_and_tostring_contained() {
 }
 
 #[test]
+fn coercion_valueof_cannot_escape() {
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        // valueOf on object passed to console.log — String() uses toString, not valueOf
+        const evil = { valueOf() { throw new Error("escape"); } };
+        try { console.log(evil); } catch(e) {}
+
+        // valueOf returning object (infinite coercion)
+        const loop_obj = { valueOf() { return loop_obj; } };
+        try { console.log(+loop_obj); } catch(e) {}
+
+        // toString/valueOf priority — toString is called for string coercion
+        const prio = {
+            toString() { throw new Error("toString"); },
+            valueOf() { throw new Error("valueOf"); }
+        };
+        try { console.log("" + prio); } catch(e) {}
+
+        console.log("survived");
+    "#,
+    );
+    // Read past any coercion output to find "survived"
+    let mut lines = Vec::new();
+    loop {
+        let line = c.read_line();
+        lines.push(line.clone());
+        if line == "survived" { break; }
+    }
+    assert!(lines.contains(&"survived".to_string()));
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
+fn thrown_non_error_values_contained() {
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        // Throw primitives
+        try { throw 42; } catch(e) { console.log(typeof e); }
+        try { throw "str"; } catch(e) { console.log(typeof e); }
+        try { throw null; } catch(e) { console.log(e); }
+        try { throw undefined; } catch(e) { console.log(e); }
+
+        // Throw object with malicious toString
+        try {
+            throw { toString() { throw new Error("nested"); } };
+        } catch(e) {
+            try { "" + e; } catch(e2) { console.log("nested caught"); }
+        }
+
+        console.log("survived");
+    "#,
+    );
+    assert_eq!(c.read_line(), "number");
+    assert_eq!(c.read_line(), "string");
+    assert_eq!(c.read_line(), "null");
+    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.read_line(), "nested caught");
+    assert_eq!(c.read_line(), "survived");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
+fn getter_based_escape_attempts() {
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        // Try to define getter on frozen prototype (should fail silently or throw)
+        try {
+            Object.defineProperty(Object.prototype, "escape", {
+                get() { return "leaked"; }
+            });
+            console.log("FAIL");
+        } catch(e) {
+            console.log("blocked");
+        }
+
+        // Getter on a local object (allowed, but can't escape)
+        const obj = {};
+        try {
+            Object.defineProperty(obj, "trap", {
+                get() { throw new Error("trap"); }
+            });
+            obj.trap;
+            console.log("FAIL");
+        } catch(e) {
+            console.log("caught");
+        }
+
+        // Try to access constructor chain from error
+        try {
+            null.x;
+        } catch(e) {
+            const ctor = e.constructor;
+            try {
+                Object.defineProperty(ctor.prototype, "evil", { value: 1 });
+                console.log("FAIL");
+            } catch(e2) {
+                console.log("frozen");
+            }
+        }
+
+        console.log("survived");
+    "#,
+    );
+    assert_eq!(c.read_line(), "blocked");
+    assert_eq!(c.read_line(), "caught");
+    assert_eq!(c.read_line(), "frozen");
+    assert_eq!(c.read_line(), "survived");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
+fn circular_structure_handling() {
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        // Circular object in console.log (String coercion)
+        const a = {};
+        a.self = a;
+        try { console.log(a); } catch(e) {}
+
+        // Circular array
+        const arr = [1, 2, 3];
+        arr.push(arr);
+        try { console.log(arr); } catch(e) {}
+
+        // Circular in JSON.stringify
+        const circ = {};
+        circ.ref = circ;
+        try { JSON.stringify(circ); } catch(e) { console.log("json caught"); }
+
+        console.log("survived");
+    "#,
+    );
+    // Read past any output from the first two attempts
+    let mut lines = Vec::new();
+    loop {
+        let line = c.read_line();
+        lines.push(line.clone());
+        if line == "survived" {
+            break;
+        }
+    }
+    assert!(lines.contains(&"json caught".to_string()));
+    assert!(lines.contains(&"survived".to_string()));
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
+fn constructor_recovery_attempts_blocked() {
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        // Try to recover Function via error constructor chain
+        // (returns the poisoned constructor, not real Function)
+        try {
+            const e = new Error();
+            const ctor = e.constructor.constructor;
+            ctor("return 1")(); // should throw "Function constructor is disabled"
+            console.log("FAIL");
+        } catch(e) {
+            console.log("poisoned");
+        }
+
+        // Try to recover RegExp constructor via literal
+        try {
+            const re = /x/;
+            const RegExp = re.constructor;
+            // Prototype should be frozen
+            RegExp.prototype.evil = true;
+            // Check if it actually stuck (non-strict mode silently fails)
+            console.log(RegExp.prototype.evil === true ? "FAIL" : "silent-fail");
+        } catch(e) {
+            console.log("frozen");
+        }
+
+        // Try to recover Symbol via getOwnPropertySymbols
+        try {
+            const syms = Object.getOwnPropertySymbols(Object.prototype);
+            if (syms.length > 0) {
+                const Sym = syms[0].constructor;
+                Sym.prototype.evil = true;
+                console.log("FAIL");
+            } else {
+                console.log("no syms");
+            }
+        } catch(e) {
+            console.log("frozen");
+        }
+
+        console.log("survived");
+    "#,
+    );
+    let mut lines = Vec::new();
+    loop {
+        let line = c.read_line();
+        lines.push(line.clone());
+        if line == "survived" { break; }
+    }
+    // Function constructor should be the poisoned one, not actual Function
+    assert!(!lines.contains(&"FAIL".to_string()), "escape detected: {:?}", lines);
+    assert!(lines.contains(&"survived".to_string()));
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
 fn intl_crypto_queuemicrotask_deleted() {
     let mut c = Hermit::spawn();
     c.eval(

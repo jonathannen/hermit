@@ -105,6 +105,24 @@
     writable: false
   });
 
+  // Freeze prototypes reachable through literals but not through the restored
+  // allowlist. These survive deletion because literals bypass globalThis.
+  // Must happen before deny-by-default deletion so the constructors are accessible.
+  _freeze(RegExp.prototype);                                         // /foo/.constructor.prototype
+  _freeze(RegExp);
+  _freeze(Symbol.prototype);                                         // recoverable via getOwnPropertySymbols
+  _freeze(Symbol);
+
+  // Freeze iterator prototypes (reachable via [].values(), new Map().values(), etc.)
+  const _arrIter = [].values();
+  const _ArrayIteratorProto = _getPrototypeOf(_arrIter);
+  const _IteratorProto = _getPrototypeOf(_ArrayIteratorProto);
+  _freeze(_ArrayIteratorProto);
+  _freeze(_IteratorProto);
+  _freeze(_getPrototypeOf(new _Map().values()));
+  _freeze(_getPrototypeOf(new _Set().values()));
+  _freeze(_getPrototypeOf(""[Symbol.iterator]()));
+
   // Deny-by-default: delete ALL own properties (enumerable and non-enumerable)
   // from globalThis, then restore only the safe allowlist below. This ensures
   // new V8 globals (e.g. WebAssembly, Iterator) are blocked automatically.
