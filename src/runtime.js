@@ -91,47 +91,12 @@
   _freeze(Object.getPrototypeOf(new _Set().values()));               // SetIteratorPrototype
   _freeze(Object.getPrototypeOf(""[Symbol.iterator]()));             // StringIteratorPrototype
 
-  // Delete dangerous globals
-  delete current.Deno;
-  delete current.Date;
-  delete current.Math;
-  delete current.crypto;
-  delete current.Reflect;
-  delete current.Proxy;
-  delete current.WeakRef;
-  delete current.FinalizationRegistry;
-  delete current.SharedArrayBuffer;
-  delete current.Atomics;
-  delete current.ArrayBuffer;
-  delete current.DataView;
-  delete current.Int8Array;
-  delete current.Uint8Array;
-  delete current.Uint8ClampedArray;
-  delete current.Int16Array;
-  delete current.Uint16Array;
-  delete current.Int32Array;
-  delete current.Uint32Array;
-  delete current.Float32Array;
-  delete current.Float64Array;
-  delete current.BigInt64Array;
-  delete current.BigUint64Array;
-  delete current.Map;
-  delete current.Set;
-  delete current.WeakMap;
-  delete current.WeakSet;
-  delete current.Symbol;
-  delete current.RegExp;
-  delete current.BigInt;
-  delete current.Intl;
-  delete current.WebAssembly;
-  delete current.console;
-  delete current.queueMicrotask;
-
-  // Clear any remaining enumerable properties
-  for (const key of _Object.keys(current)) {
-    if (key !== "globalThis") {
-      delete current[key];
-    }
+  // Deny-by-default: delete ALL own properties (enumerable and non-enumerable)
+  // from globalThis, then restore only the safe allowlist below. This ensures
+  // new V8 globals (e.g. WebAssembly, Iterator) are blocked automatically.
+  for (const key of _Object.getOwnPropertyNames(current)) {
+    if (key === "globalThis") continue;
+    try { delete current[key]; } catch(_) {}
   }
 
   // Restore safe builtins

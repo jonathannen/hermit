@@ -268,25 +268,33 @@ fn dynamic_import_blocked() {
 }
 
 #[test]
-fn dangerous_globals_are_deleted() {
+fn globals_are_deny_by_default() {
     let mut c = Hermit::spawn();
+    // Enumerate all own properties on globalThis — only the safe allowlist
+    // should survive. This catches new V8 globals automatically.
     c.eval(
         r#"
-        console.log(typeof RegExp);
-        console.log(typeof Symbol);
-        console.log(typeof WeakMap);
-        console.log(typeof WeakSet);
-        console.log(typeof WeakRef);
-        console.log(typeof Proxy);
-        console.log(typeof Reflect);
+        const allowed = [
+            "Array", "Boolean", "Error", "JSON", "Map", "Number", "Object",
+            "Promise", "RangeError", "Set", "String", "TypeError",
+            "console", "eval", "globalThis", "undefined", "NaN", "Infinity",
+            "isNaN", "isFinite", "parseFloat", "parseInt",
+            "decodeURI", "decodeURIComponent", "encodeURI", "encodeURIComponent",
+            "AggregateError"
+        ];
+        const props = Object.getOwnPropertyNames(globalThis);
+        const unexpected = props.filter(p => !allowed.includes(p));
+        console.log(unexpected.length === 0 ? "OK" : "UNEXPECTED: " + unexpected.join(", "));
     "#,
     );
-    assert_eq!(c.read_line(), "undefined");
-    assert_eq!(c.read_line(), "undefined");
-    assert_eq!(c.read_line(), "undefined");
-    assert_eq!(c.read_line(), "undefined");
-    assert_eq!(c.read_line(), "undefined");
-    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.read_line(), "OK");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
+fn webassembly_is_inaccessible() {
+    let mut c = Hermit::spawn();
+    c.eval(r#"console.log(typeof WebAssembly);"#);
     assert_eq!(c.read_line(), "undefined");
     assert_eq!(c.shutdown(), 0);
 }
