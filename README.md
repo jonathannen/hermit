@@ -59,7 +59,7 @@ Note: Seccomp and mount namespaces are Linux only. There is a Mac build for loca
 
 No sandbox is perfect, but escaping the V8 sandbox alone is worth [tens to hundreds of thousands of dollars in bounties from Google](https://bughunters.google.com/about/rules/chrome-friends/chrome-vulnerability-reward-program-rules). The Seccomp rules greatly limit the envelope even if that escape occurs. The reduced and frozen globals are the cherry on top.
 
-Whilst that's pretty good, it's the start. To use this I'd recommend a defence-in-depth approach including at least:
+Hermit is a security layer. The default mode is on Linux with the defaults (strict and jitless). From here Hermit recommends a defence-in-depth approach:
 
 - **Keep deno_core and V8 up-to-date.** This means updating the crates and making sure they track the latest V8 version. Easily the most important thing you can do.
 - **Design your protocol carefully.** Exposing something like the current time may create opportunities for timing attacks. Consider short-lived tokens and other mechanisms where callouts are required.

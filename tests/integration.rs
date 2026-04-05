@@ -765,7 +765,7 @@ fn console_log_non_string_types() {
     assert_eq!(c.read_line(), "true");
     assert_eq!(c.read_line(), "12345");
     assert_eq!(c.read_line(), "[object Object]");
-    assert_eq!(c.read_line(), "[object Array]"); // safeString avoids attacker-controlled toString
+    assert_eq!(c.read_line(), "[object Object]"); // safeString returns static tag for all objects
     assert_eq!(c.read_line(), "1 two null");
     assert_eq!(c.shutdown(), 0);
 }
@@ -989,5 +989,414 @@ fn async_works_after_warmup() {
     let mut c = Hermit::spawn();
     c.eval(r#"Promise.resolve(42).then(v => console.log(v))"#);
     assert_eq!(c.read_line(), "42");
+    assert_eq!(c.shutdown(), 0);
+}
+
+// === Critical attack surface: ensure key primitives are fully inaccessible ===
+// These tests verify that the primitives most useful for V8 heap exploitation
+// (TypedArrays, ArrayBuffer, Proxy, eval, Function constructor) cannot be
+// recovered through any indirect path — not just that the globals are deleted.
+
+#[test]
+fn arraybuffer_not_recoverable_from_prototypes() {
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        // Try every known path to recover ArrayBuffer/TypedArray constructors
+        let found = false;
+
+        // Via prototype chain of remaining builtins
+        const probes = [Array, Object, Map, Set, String, Number, Boolean, Error, Promise];
+        for (const C of probes) {
+            try {
+                const proto = Object.getPrototypeOf(C);
+                if (proto && proto.constructor && proto.constructor.name === "ArrayBuffer") found = true;
+            } catch(e) {}
+        }
+
+        // Via Symbol.species on Array
+        try {
+            const arr = [];
+            const species = arr.constructor[Symbol.species];
+            if (species && species.name === "ArrayBuffer") found = true;
+        } catch(e) {}
+
+        // Via iterator result objects
+        try {
+            const iter = [].values();
+            const proto = Object.getPrototypeOf(iter);
+            const names = Object.getOwnPropertyNames(proto);
+            for (const n of names) {
+                try {
+                    const val = proto[n];
+                    if (typeof val === "function" && val.name === "ArrayBuffer") found = true;
+                } catch(e) {}
+            }
+        } catch(e) {}
+
+        console.log(found ? "FAIL" : "OK");
+    "#,
+    );
+    assert_eq!(c.read_line(), "OK");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
+fn function_constructor_blocked_all_variants() {
+    // Verify Function constructor is poisoned on sync, async, generator,
+    // and async generator function prototypes — not just regular functions.
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        let escaped = false;
+
+        // Regular function
+        try { (function(){}).constructor("return 1")(); escaped = true; } catch(e) {}
+
+        // Arrow function
+        try { (()=>{}).constructor("return 1")(); escaped = true; } catch(e) {}
+
+        // Async function
+        try { (async function(){}).constructor("return 1")(); escaped = true; } catch(e) {}
+
+        // Generator function
+        try { (function*(){}).constructor("return 1")(); escaped = true; } catch(e) {}
+
+        // Async generator function
+        try { (async function*(){}).constructor("return 1")(); escaped = true; } catch(e) {}
+
+        // Via method shorthand
+        try { ({m(){}}).m.constructor("return 1")(); escaped = true; } catch(e) {}
+
+        // Via bound function
+        try { (function(){}).bind().constructor("return 1")(); escaped = true; } catch(e) {}
+
+        // Via Reflect (should be deleted, but belt-and-suspenders)
+        try { Reflect.construct(Function, ["return 1"]); escaped = true; } catch(e) {}
+
+        console.log(escaped ? "FAIL" : "OK");
+    "#,
+    );
+    assert_eq!(c.read_line(), "OK");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
+fn eval_blocked_all_paths() {
+    // Verify eval is blocked both directly and via indirect invocation.
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        let escaped = false;
+
+        // Direct eval
+        try { eval("escaped = true"); } catch(e) {}
+
+        // Indirect eval (non-strict eval via variable)
+        try { const e = eval; e("escaped = true"); } catch(e) {}
+
+        // eval via globalThis
+        try { globalThis.eval("escaped = true"); } catch(e) {}
+
+        // eval via bracket notation
+        try { globalThis["eval"]("escaped = true"); } catch(e) {}
+
+        console.log(escaped ? "FAIL" : "OK");
+    "#,
+    );
+    assert_eq!(c.read_line(), "OK");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
+fn proxy_not_recoverable() {
+    // Verify Proxy can't be recovered through any indirect path.
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        let found = false;
+
+        // Direct access
+        try { if (typeof Proxy !== "undefined") found = true; } catch(e) {}
+
+        // Via Object.prototype chain
+        try {
+            const names = Object.getOwnPropertyNames(Object);
+            if (names.includes("Proxy")) found = true;
+        } catch(e) {}
+
+        // Walk all reachable properties from globalThis
+        try {
+            const props = Object.getOwnPropertyNames(globalThis);
+            for (const p of props) {
+                try {
+                    const v = globalThis[p];
+                    if (typeof v === "function" && v.name === "Proxy") found = true;
+                } catch(e) {}
+            }
+        } catch(e) {}
+
+        console.log(found ? "FAIL" : "OK");
+    "#,
+    );
+    assert_eq!(c.read_line(), "OK");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
+fn webassembly_not_recoverable() {
+    // Verify WebAssembly can't be recovered through prototype walking.
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        let found = false;
+
+        try { if (typeof WebAssembly !== "undefined") found = true; } catch(e) {}
+
+        // Walk all globals looking for anything wasm-related
+        try {
+            const props = Object.getOwnPropertyNames(globalThis);
+            for (const p of props) {
+                if (p.toLowerCase().includes("wasm") || p === "WebAssembly") found = true;
+            }
+        } catch(e) {}
+
+        console.log(found ? "FAIL" : "OK");
+    "#,
+    );
+    assert_eq!(c.read_line(), "OK");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
+fn all_prototype_chains_frozen() {
+    // Walk the prototype chain of every reachable builtin and verify
+    // every prototype in the chain is frozen. Only checks prototypes,
+    // not fresh instances (which are naturally unfrozen).
+    let mut c = Hermit::spawn_with_args(&["--timeout", "5s"]);
+    c.eval(
+        r#"
+        // Collect prototypes (not instances) reachable from builtins and literals
+        const protos = new Set();
+        const builtins = [Array, Boolean, Error, JSON, Map, Number, Object, Promise,
+            RangeError, Set, String, TypeError];
+        for (const B of builtins) {
+            let p = B; while (p) { protos.add(p); p = Object.getPrototypeOf(p); }
+            if (B.prototype) { let p = B.prototype; while (p) { protos.add(p); p = Object.getPrototypeOf(p); } }
+        }
+        // Literal-reachable prototypes
+        // Symbol global is deleted, but well-known symbols survive on prototypes.
+        // Use Object.getOwnPropertySymbols to find @@iterator on String.prototype.
+        const strSyms = Object.getOwnPropertySymbols(String.prototype);
+        const iterSym = strSyms.find(s => String.prototype[s] && typeof String.prototype[s] === "function");
+        const literalProtos = [
+            Object.getPrototypeOf(/x/),                       // RegExp.prototype
+            Object.getPrototypeOf([].values()),                // ArrayIterator proto
+            Object.getPrototypeOf(new Map().values()),         // MapIterator proto
+            Object.getPrototypeOf(new Set().values()),         // SetIterator proto
+            Object.getPrototypeOf((function*(){})),                            // GeneratorFunction proto
+            Object.getPrototypeOf((function*(){}).prototype),                  // Generator.prototype (shared)
+            Object.getPrototypeOf((async function*(){}).prototype),           // AsyncGenerator.prototype (shared)
+            Object.getPrototypeOf(async function(){}),                        // AsyncFunction.prototype
+        ];
+        // Add StringIterator proto if we found @@iterator
+        if (iterSym) {
+            try { literalProtos.push(Object.getPrototypeOf(""[iterSym]())); } catch(e) {}
+        }
+        for (const lp of literalProtos) {
+            let p = lp; while (p) { protos.add(p); p = Object.getPrototypeOf(p); }
+        }
+        const unfrozen = [];
+        for (const p of protos) {
+            if (!Object.isFrozen(p)) {
+                unfrozen.push((p.constructor && p.constructor.name) || typeof p);
+            }
+        }
+        console.log(unfrozen.length === 0 ? "OK" : "UNFROZEN: " + unfrozen.join(", "));
+    "#,
+    );
+    assert_eq!(c.read_line(), "OK");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
+fn generator_prototype_is_frozen() {
+    // The shared Generator.prototype (with next/return/throw) must be frozen.
+    // Each function* gets its own .prototype, but they all share the same
+    // [[Prototype]] which is Generator.prototype. If that's mutable, an attacker
+    // can hijack .next()/.return()/.throw() on ALL generator instances.
+    let mut c = Hermit::spawn_with_args(&["--timeout", "5s"]);
+    c.eval(
+        r#"
+        // Walk past the per-function .prototype to the shared Generator.prototype
+        const perFunc = Object.getPrototypeOf((function*(){})());
+        const shared = Object.getPrototypeOf(perFunc);
+        // isFrozen is the definitive check — sloppy mode silently drops writes
+        console.log(Object.isFrozen(shared) ? "OK" : "FAIL");
+    "#,
+    );
+    assert_eq!(c.read_line(), "OK");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
+fn async_generator_prototype_is_frozen() {
+    // Same as generator test: the shared AsyncGenerator.prototype must be frozen.
+    let mut c = Hermit::spawn_with_args(&["--timeout", "5s"]);
+    c.eval(
+        r#"
+        // agFunc.prototype is per-function; its [[Prototype]] is the shared one
+        const agFunc = async function*(){};
+        const shared = Object.getPrototypeOf(agFunc.prototype);
+        console.log(Object.isFrozen(shared) ? "OK" : "FAIL");
+    "#,
+    );
+    assert_eq!(c.read_line(), "OK");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
+fn deleted_error_prototypes_are_frozen() {
+    // ReferenceError, SyntaxError, URIError are deleted from globalThis but
+    // their prototypes are still reachable when V8 throws them internally.
+    // If unfrozen, an attacker can pollute the prototype to affect all
+    // subsequently caught errors of that type.
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        let unfrozen = [];
+
+        // ReferenceError.prototype �� reachable via undeclared variable access
+        try { undeclared_xyz; } catch(e) {
+            if (!Object.isFrozen(Object.getPrototypeOf(e))) unfrozen.push("ReferenceError");
+        }
+
+        // SyntaxError.prototype — reachable via JSON.parse
+        try { JSON.parse("{bad"); } catch(e) {
+            if (!Object.isFrozen(Object.getPrototypeOf(e))) unfrozen.push("SyntaxError");
+        }
+
+        // URIError.prototype — reachable via decodeURI
+        try { decodeURI("%"); } catch(e) {
+            if (!Object.isFrozen(Object.getPrototypeOf(e))) unfrozen.push("URIError");
+        }
+
+        console.log(unfrozen.length === 0 ? "OK" : "UNFROZEN: " + unfrozen.join(", "));
+    "#,
+    );
+    assert_eq!(c.read_line(), "OK");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
+fn bigint_prototype_is_frozen() {
+    // BigInt is deleted from globalThis but BigInt.prototype is reachable
+    // via bigint literals (42n). If unfrozen, an attacker can pollute
+    // toString/valueOf on all bigints.
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        const biProto = Object.getPrototypeOf(Object(42n));
+        console.log(Object.isFrozen(biProto) ? "OK" : "FAIL");
+    "#,
+    );
+    assert_eq!(c.read_line(), "OK");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
+fn console_log_does_not_invoke_tostringtag_getter() {
+    // Symbol.toStringTag getter on user objects must not fire inside console.log.
+    // safeString returns a static "[object Object]" without reading any property.
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        const syms = Object.getOwnPropertySymbols(JSON);
+        const toStringTag = syms.find(s => String(s) === "Symbol(Symbol.toStringTag)");
+        let getterFired = false;
+        const evil = {};
+        if (toStringTag) {
+            Object.defineProperty(evil, toStringTag, {
+                get() { getterFired = true; return "pwned"; }
+            });
+        }
+        console.log(evil);
+        console.log(getterFired ? "FAIL" : "OK");
+    "#,
+    );
+    assert_eq!(c.read_line(), "[object Object]");
+    assert_eq!(c.read_line(), "OK");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
+fn aggregate_error_prototype_is_frozen() {
+    // AggregateError is recoverable via Promise.any() even though it's
+    // deleted from globalThis. Its prototype and constructor must be frozen.
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        Promise.any([Promise.reject(1), Promise.reject(2)]).catch(e => {
+            const proto = Object.getPrototypeOf(e);
+            const ctor = e.constructor;
+            const protoOk = Object.isFrozen(proto);
+            const ctorOk = Object.isFrozen(ctor);
+            console.log(protoOk && ctorOk ? "OK" : "FAIL proto=" + protoOk + " ctor=" + ctorOk);
+        });
+    "#,
+    );
+    assert_eq!(c.read_line(), "OK");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
+fn regexp_string_iterator_prototype_is_frozen() {
+    // %RegExpStringIteratorPrototype% is reachable via String.prototype.matchAll
+    // but not from globalThis. If unfrozen, attacker can hijack .next() on all
+    // matchAll iterators.
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        const iter = "foo".matchAll(/o/g);
+        const proto = Object.getPrototypeOf(iter);
+        console.log(Object.isFrozen(proto) ? "OK" : "FAIL");
+    "#,
+    );
+    assert_eq!(c.read_line(), "OK");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[test]
+fn no_raw_memory_access_primitives() {
+    // Comprehensive check that ALL memory-access primitives are removed.
+    // These are the exact types an attacker needs for heap read/write.
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        const dangerous = [
+            "ArrayBuffer", "SharedArrayBuffer", "DataView",
+            "Int8Array", "Uint8Array", "Uint8ClampedArray",
+            "Int16Array", "Uint16Array", "Int32Array", "Uint32Array",
+            "Float32Array", "Float64Array", "BigInt64Array", "BigUint64Array",
+            "WebAssembly", "Atomics", "Proxy", "Reflect",
+            "eval", "Function",
+        ];
+        const present = dangerous.filter(name => {
+            try { return typeof globalThis[name] !== "undefined"; } catch(e) { return false; }
+        });
+        // eval is intentionally kept as a throwing stub — verify it throws
+        let evalWorks = false;
+        try { eval("1"); evalWorks = true; } catch(e) {}
+        // Function is gone (not even a stub — constructor is poisoned on prototypes)
+        let fnWorks = false;
+        try { Function("return 1")(); fnWorks = true; } catch(e) {}
+
+        const evalsafe = present.filter(p => p !== "eval");
+        const ok = evalsafe.length === 0 && !evalWorks && !fnWorks;
+        console.log(ok ? "OK" : "FAIL: " + evalsafe.join(", ") +
+            (evalWorks ? " eval-works" : "") + (fnWorks ? " fn-works" : ""));
+    "#,
+    );
+    assert_eq!(c.read_line(), "OK");
     assert_eq!(c.shutdown(), 0);
 }

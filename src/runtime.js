@@ -33,17 +33,19 @@
   const _setHas = Set.prototype.has;
   const _objToString = Object.prototype.toString;
 
-  // Safe serializer that never invokes attacker-controlled toString/valueOf.
-  // Handles primitives directly; objects get the tamper-proof [object Tag] form.
+  // Safe serializer that never invokes attacker-controlled code.
+  // Handles primitives directly; objects/functions get a static type tag.
+  // We avoid Object.prototype.toString because it reads Symbol.toStringTag,
+  // which can be a getter on user-created objects.
   function safeString(val) {
     if (val === undefined) return "undefined";
     if (val === null) return "null";
     const t = typeof val;
     if (t === "string") return val;
     if (t === "number" || t === "boolean" || t === "bigint") return "" + val;
-    // For objects/functions, use the captured Object.prototype.toString to
-    // avoid calling any user-defined toString/valueOf/Symbol.toPrimitive.
-    return _objToString.call(val);
+    if (t === "function") return "[object Function]";
+    // t === "object" -- return static tag to avoid Symbol.toStringTag getters
+    return "[object Object]";
   }
 
   // Transitive deep freeze: walk the entire reachable object graph from `root`
@@ -99,18 +101,30 @@
   const genFunc = function* () {};
   const asyncGenFunc = async function* () {};
 
-  _defineProperty(Object.getPrototypeOf(syncFunc), "constructor", {
+  const _syncFuncProto = _getPrototypeOf(syncFunc);
+  const _asyncFuncProto = _getPrototypeOf(asyncFunc);
+  const _genFuncProto = _getPrototypeOf(genFunc);
+  const _asyncGenFuncProto = _getPrototypeOf(asyncGenFunc);
+
+  _defineProperty(_syncFuncProto, "constructor", {
     configurable: false, value: poisonConstructor, writable: false
   });
-  _defineProperty(Object.getPrototypeOf(asyncFunc), "constructor", {
+  _defineProperty(_asyncFuncProto, "constructor", {
     configurable: false, value: poisonConstructor, writable: false
   });
-  _defineProperty(Object.getPrototypeOf(genFunc), "constructor", {
+  _defineProperty(_genFuncProto, "constructor", {
     configurable: false, value: poisonConstructor, writable: false
   });
-  _defineProperty(Object.getPrototypeOf(asyncGenFunc), "constructor", {
+  _defineProperty(_asyncGenFuncProto, "constructor", {
     configurable: false, value: poisonConstructor, writable: false
   });
+
+  // Freeze function prototypes immediately after poisoning to prevent
+  // mutation via other references before deepFreeze(current) runs.
+  _freeze(_syncFuncProto);
+  _freeze(_asyncFuncProto);
+  _freeze(_genFuncProto);
+  _freeze(_asyncGenFuncProto);
 
   // Disable eval at JS level (belt-and-suspenders with V8 flag)
   _defineProperty(current, "eval", {
@@ -119,13 +133,30 @@
     writable: false
   });
 
-  // Freeze prototypes reachable through literals but not through the restored
-  // allowlist. These survive deletion because literals bypass globalThis.
+  // Freeze prototypes reachable through literals or V8 internal throws but not
+  // through the restored allowlist. These survive deletion because literals and
+  // catch blocks bypass globalThis.
   // Must happen before deny-by-default deletion so the constructors are accessible.
   _freeze(RegExp.prototype);                                         // /foo/.constructor.prototype
   _freeze(RegExp);
   _freeze(Symbol.prototype);                                         // recoverable via getOwnPropertySymbols
   _freeze(Symbol);
+  _freeze(BigInt.prototype);                                         // 42n literal
+  _freeze(BigInt);
+
+  // Error subtypes not in the restore list but recoverable at runtime.
+  // ReferenceError: undeclared variable access. SyntaxError: JSON.parse.
+  // URIError: decodeURI. EvalError: not thrown by V8 but freeze defensively.
+  // AggregateError: Promise.any() rejects with it when all inputs reject.
+  // InternalError: non-standard, some V8 builds expose it.
+  // SuppressedError: explicit resource management (using) - Stage 4, may
+  //   appear in future V8 builds.
+  deepFreeze(ReferenceError.prototype);
+  deepFreeze(SyntaxError.prototype);
+  deepFreeze(URIError.prototype);
+  deepFreeze(EvalError.prototype);
+  if (typeof AggregateError !== "undefined") deepFreeze(AggregateError.prototype);
+  if (typeof SuppressedError !== "undefined") deepFreeze(SuppressedError.prototype);
 
   // Freeze iterator prototypes (reachable via [].values(), new Map().values(), etc.)
   const _arrIter = [].values();
@@ -136,13 +167,35 @@
   _freeze(_getPrototypeOf(new _Map().values()));
   _freeze(_getPrototypeOf(new _Set().values()));
   _freeze(_getPrototypeOf(""[Symbol.iterator]()));
+  deepFreeze(_getPrototypeOf("".matchAll(/(?:)/g)));              // %RegExpStringIteratorPrototype%
 
-  // Deny-by-default: delete ALL own properties (enumerable and non-enumerable)
-  // from globalThis, then restore only the safe allowlist below. This ensures
-  // new V8 globals (e.g. WebAssembly, Iterator) are blocked automatically.
+  // Freeze generator, async generator, and async function prototypes.
+  // These are not reachable from globalThis (created via literal syntax only),
+  // so deepFreeze(globalThis) won't reach them. An unfrozen generator prototype
+  // allows prototype pollution scoped to all generator instances (hijacking
+  // .next/.return/.throw).
+  //
+  // Each generator function gets its own .prototype, but they all share the
+  // same [[Prototype]] chain: genFunc.prototype -> Generator.prototype (shared)
+  // -> IteratorPrototype. We must freeze the shared prototypes, not the
+  // per-function .prototype objects.
+  //
+  // Uses genFunc/asyncGenFunc/asyncFunc already defined above for poisoning.
+  deepFreeze(_getPrototypeOf(genFunc));                          // GeneratorFunction.prototype
+  deepFreeze(_getPrototypeOf(genFunc.prototype));                // Generator.prototype (shared)
+  deepFreeze(_getPrototypeOf(asyncGenFunc));                     // AsyncGeneratorFunction.prototype
+  deepFreeze(_getPrototypeOf(asyncGenFunc.prototype));           // AsyncGenerator.prototype (shared)
+  deepFreeze(_getPrototypeOf(asyncFunc));                        // AsyncFunction.prototype
+
+  // Deny-by-default: delete ALL own properties (string-keyed and symbol-keyed,
+  // enumerable and non-enumerable) from globalThis, then restore only the safe
+  // allowlist below. This ensures new V8 globals are blocked automatically.
   for (const key of _getOwnPropertyNames(current)) {
     if (key === "globalThis") continue;
     try { delete current[key]; } catch(_) {}
+  }
+  for (const sym of _getOwnPropertySymbols(current)) {
+    try { delete current[sym]; } catch(_) {}
   }
 
   // Restore safe builtins
