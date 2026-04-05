@@ -123,6 +123,7 @@
   delete current.RegExp;
   delete current.BigInt;
   delete current.Intl;
+  delete current.WebAssembly;
   delete current.console;
   delete current.queueMicrotask;
 
