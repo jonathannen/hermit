@@ -337,6 +337,30 @@ fn apply_rlimits(mode: sandbox::SandboxMode) {
     }
 }
 
+/// Tighten RLIMIT_NOFILE after V8 init to just above current open FD count.
+/// This limits the attack surface of internal V8/tokio FDs by preventing new
+/// FDs from being opened beyond what's needed for GC thread creation.
+fn tighten_nofile_limit() {
+    #[cfg(unix)]
+    {
+        // Count open FDs by probing with fstat (avoids read_dir which needs
+        // fchdir, blocked by seccomp). Check FDs 0..64 (our RLIMIT_NOFILE cap).
+        let mut max_open: u64 = 0;
+        for fd in 0..64i32 {
+            let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+            // SAFETY: fstat on a valid or invalid FD just returns 0 or EBADF.
+            if unsafe { libc::fstat(fd, &mut stat) } == 0 {
+                max_open = fd as u64 + 1;
+            }
+        }
+        // +8 headroom for V8 GC threads that open /proc files briefly
+        let cap = max_open + 8;
+        let limit = libc::rlimit { rlim_cur: cap, rlim_max: cap };
+        // SAFETY: setrlimit with valid rlimit struct, lowering limits only.
+        unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit); }
+    }
+}
+
 const MAX_BLOCK_SIZE: usize = 64 * 1024 * 1024; // 64MB
 
 fn spawn_stdin_reader() -> mpsc::Receiver<String> {
@@ -444,6 +468,11 @@ async fn run(
     // These act as a backstop for resource exhaustion attacks that bypass V8's
     // heap limit (which only covers the JS heap, not stack, threads, or FDs).
     apply_rlimits(sandbox_mode);
+
+    // Tighten RLIMIT_NOFILE to just above current open FD count. V8 and tokio
+    // have opened their internal FDs; this caps the total to prevent a post-escape
+    // attacker from opening new ones. Must run before seccomp (fstat is blocked).
+    tighten_nofile_limit();
 
     // Install stage-1 seccomp filter (Linux only, no-op on macOS)
     seccomp::install(allow_jit).map_err(|e| {
