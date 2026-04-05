@@ -258,17 +258,20 @@ fn main() {
         .expect("failed to create tokio runtime");
 
     let local = tokio::task::LocalSet::new();
-    if let Err(e) = local.block_on(&runtime, run(memory_limit, allow_jit, timeout)) {
+    if let Err(e) = local.block_on(&runtime, run(memory_limit, allow_jit, timeout, sandbox_mode)) {
         eprintln!("fatal: {}", e);
         std::process::exit(1);
     }
 }
 
 /// Apply OS-level resource limits. Called after runtime init, before seccomp.
-fn apply_rlimits() {
+/// In strict mode, setrlimit failures are fatal.
+fn apply_rlimits(mode: sandbox::SandboxMode) {
     #[cfg(unix)]
     {
         use libc::{rlimit, setrlimit, RLIMIT_FSIZE, RLIMIT_NOFILE};
+
+        let strict = mode == sandbox::SandboxMode::Strict;
 
         // RLIMIT_NOFILE: cap open file descriptors at 64 (or the current soft
         // limit if lower). V8/tokio have already opened their FDs; this prevents
@@ -279,14 +282,20 @@ fn apply_rlimits() {
             let cap = current.rlim_cur.min(64);
             let limit = rlimit { rlim_cur: cap, rlim_max: cap };
             // SAFETY: setrlimit with valid rlimit struct, lowering limits only.
-            unsafe { setrlimit(RLIMIT_NOFILE, &limit); }
+            if unsafe { setrlimit(RLIMIT_NOFILE, &limit) } != 0 && strict {
+                eprintln!("fatal: setrlimit(RLIMIT_NOFILE) failed");
+                std::process::exit(1);
+            }
         }
 
         // RLIMIT_FSIZE: prevent creating files (belt-and-suspenders with seccomp
         // openat read-only restriction). Set to 0 = no file writes allowed.
         let zero_limit = rlimit { rlim_cur: 0, rlim_max: 0 };
         // SAFETY: setrlimit with valid rlimit struct.
-        unsafe { setrlimit(RLIMIT_FSIZE, &zero_limit); }
+        if unsafe { setrlimit(RLIMIT_FSIZE, &zero_limit) } != 0 && strict {
+            eprintln!("fatal: setrlimit(RLIMIT_FSIZE) failed");
+            std::process::exit(1);
+        }
 
         // RLIMIT_NPROC: cap number of processes/threads. V8 threads are already
         // created, so freeze at current count. This prevents thread explosion.
@@ -304,7 +313,10 @@ fn apply_rlimits() {
                 .unwrap_or(32); // fallback: generous cap
             let nproc_limit = rlimit { rlim_cur: nproc + 8, rlim_max: nproc + 8 };
             // SAFETY: setrlimit with valid rlimit struct.
-            unsafe { setrlimit(RLIMIT_NPROC, &nproc_limit); }
+            if unsafe { setrlimit(RLIMIT_NPROC, &nproc_limit) } != 0 && strict {
+                eprintln!("fatal: setrlimit(RLIMIT_NPROC) failed");
+                std::process::exit(1);
+            }
         }
     }
 }
@@ -408,13 +420,14 @@ async fn run(
     memory_limit: usize,
     allow_jit: bool,
     timeout: Option<Duration>,
+    sandbox_mode: sandbox::SandboxMode,
 ) -> Result<(), AnyError> {
     let mut js_runtime = runtime::create_runtime(memory_limit, allow_jit)?;
 
     // Apply OS-level resource limits before entering the sandbox.
     // These act as a backstop for resource exhaustion attacks that bypass V8's
     // heap limit (which only covers the JS heap, not stack, threads, or FDs).
-    apply_rlimits();
+    apply_rlimits(sandbox_mode);
 
     // Install stage-1 seccomp filter (Linux only, no-op on macOS)
     seccomp::install(allow_jit).map_err(|e| {
