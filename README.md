@@ -91,7 +91,7 @@ cargo test
 
 - **macOS sandbox**: Seccomp and mount namespaces only apply on Linux. A similar set of entitlements for macOS (e.g. `sandbox_init`, App Sandbox) would be valuable.
 - **Pooling**: Unclear whether pooling isolates should be Hermit's job or its host's.
-- **Hardening**: Contributions are welcome. Potential areas: restricting `/proc/self` access after warmup, cgroup-based resource limits, and further seccomp argument filtering.
+- **Hardening**: Contributions are welcome. Potential areas: cgroup-based resource limits and unmounting `/proc/self/maps` after warmup to limit post-escape information disclosure.
 
 ## Alternatives
 
