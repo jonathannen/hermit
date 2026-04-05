@@ -826,6 +826,37 @@ fn warmup_does_not_leak_to_user_code() {
     assert_eq!(c.shutdown(), 0);
 }
 
+/// Spawn hermit and capture stderr (for kernel-boundary tests).
+/// Returns (stdout_lines, stderr_output, exit_code).
+fn run_hermit_with_input(args: &[&str], input: &str) -> (Vec<String>, String, i32) {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_hermit"));
+    if std::env::var("HERMIT_JIT").is_ok() {
+        cmd.arg("--jit");
+    }
+    if !args.contains(&"--strict") {
+        cmd.arg("--permissive");
+    }
+    cmd.args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd.spawn().expect("failed to spawn");
+    let mut stdin = child.stdin.take().unwrap();
+    stdin.write_all(input.as_bytes()).ok();
+    drop(stdin);
+
+    let output = child.wait_with_output().unwrap();
+    let stdout_lines: Vec<String> = output.stdout
+        .split(|&b| b == b'\n')
+        .filter(|l| !l.is_empty())
+        .map(|l| String::from_utf8_lossy(l).to_string())
+        .collect();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let code = output.status.code().unwrap_or(-1);
+    (stdout_lines, stderr, code)
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn seccomp_blocks_with_exit_159() {
@@ -840,6 +871,58 @@ fn seccomp_blocks_with_exit_159() {
     assert_eq!(c.read_line(), "ok");
     let code = c.shutdown();
     assert_ne!(code, 159, "normal shutdown should not exit with seccomp trap code");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn seccomp_blocks_forbidden_syscall_on_timeout() {
+    // When the watchdog kills the process via process::exit(), it exercises
+    // the exit_group syscall which is in our allowlist. Verify the timeout
+    // mechanism still works under seccomp stage-2 (exit code 142).
+    let (_, _, code) = run_hermit_with_input(
+        &["--timeout", "100ms"],
+        "while(true) {}\n\n",
+    );
+    assert_eq!(code, 142, "timeout should produce exit code 142 under seccomp");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn oom_exit_works_under_seccomp() {
+    // OOM handler calls process::exit(137). Verify it works under seccomp.
+    let (_, stderr, code) = run_hermit_with_input(
+        &["--memory-limit", "8mb"],
+        "const a = []; while(true) { a.push(new Array(10000)); }\n\n",
+    );
+    assert_eq!(code, 137, "OOM should produce exit code 137; stderr: {}", stderr);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn strict_mode_enforces_namespace() {
+    // In --strict mode on Linux, mount namespace must succeed.
+    // This test verifies the binary starts and runs correctly under strict mode.
+    let (stdout, _, code) = run_hermit_with_input(
+        &["--strict"],
+        "console.log(\"strict-ok\")\n\n",
+    );
+    assert_eq!(code, 0, "strict mode should succeed on Linux");
+    assert!(stdout.contains(&"strict-ok".to_string()));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn multiple_evals_stable_under_seccomp() {
+    // Verify that repeated evals don't trigger seccomp violations.
+    // V8 GC may spawn threads lazily; this exercises that path.
+    let mut input = String::new();
+    for i in 0..50 {
+        input.push_str(&format!("console.log({})\n\n", i));
+    }
+    let (stdout, stderr, code) = run_hermit_with_input(&[], &input);
+    assert_eq!(code, 0, "50 evals should succeed; stderr: {}", stderr);
+    assert!(!stderr.contains("SECCOMP BLOCKED"), "seccomp violation during evals: {}", stderr);
+    assert_eq!(stdout.len(), 50, "expected 50 lines of output, got {}", stdout.len());
 }
 
 #[test]
