@@ -503,13 +503,16 @@ fn allow_safe_prctl(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
     rules.insert(libc::SYS_prctl, prctl_rules);
 }
 
-/// Allow openat only for read-only opens (block write, create, truncate, append)
+/// Allow openat only for read-only opens (block write, create, truncate, append, path-only)
 #[cfg(target_os = "linux")]
 fn allow_openat_readonly(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
     // openat(dirfd, pathname, flags, mode) - flags is arg index 2
-    // Block any open that could write or create files:
-    // O_WRONLY (0x1), O_RDWR (0x2), O_CREAT (0x40), O_TRUNC (0x200), O_APPEND (0x400)
-    const DANGEROUS_FLAGS: u64 = 0x1 | 0x2 | 0x40 | 0x200 | 0x400;
+    // Block any open that could write, create files, or obtain path-only FDs:
+    // O_WRONLY (0x1), O_RDWR (0x2), O_CREAT (0x40), O_TRUNC (0x200),
+    // O_APPEND (0x400), O_PATH (0x200000)
+    // O_PATH FDs bypass permission checks and can be used with openat for
+    // relative path traversal, fstat, etc. — not needed for V8/tokio.
+    const DANGEROUS_FLAGS: u64 = 0x1 | 0x2 | 0x40 | 0x200 | 0x400 | 0x200000;
 
     // Allow only if (flags & DANGEROUS_FLAGS) == 0 (i.e. read-only)
     let rule = SeccompRule::new(vec![SeccompCondition::new(
