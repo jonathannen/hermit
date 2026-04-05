@@ -23,6 +23,54 @@
   const _URIError = URIError;
   const _defineProperty = Object.defineProperty;
   const _freeze = Object.freeze;
+  const _getOwnPropertyNames = Object.getOwnPropertyNames;
+  const _getOwnPropertySymbols = Object.getOwnPropertySymbols;
+  const _getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+  const _getPrototypeOf = Object.getPrototypeOf;
+  const _isFrozen = Object.isFrozen;
+  const _SetConstructor = Set;
+  const _setAdd = Set.prototype.add;
+  const _setHas = Set.prototype.has;
+
+  // Transitive deep freeze: walk the entire reachable object graph from `root`
+  // and freeze every object/function found. Uses a visited set to handle cycles.
+  function deepFreeze(root) {
+    const visited = new _SetConstructor();
+    const queue = [root];
+    while (queue.length > 0) {
+      const obj = queue.pop();
+      if (obj === null || obj === undefined) continue;
+      if (typeof obj !== "object" && typeof obj !== "function") continue;
+      if (_setHas.call(visited, obj)) continue;
+      _setAdd.call(visited, obj);
+
+      // Freeze this object
+      _freeze(obj);
+
+      // Walk own properties (named + symbol)
+      const names = _getOwnPropertyNames(obj);
+      const syms = _getOwnPropertySymbols(obj);
+      for (let i = 0; i < names.length; i++) {
+        const desc = _getOwnPropertyDescriptor(obj, names[i]);
+        if (desc) {
+          if (desc.value !== undefined) queue.push(desc.value);
+          if (desc.get) queue.push(desc.get);
+          if (desc.set) queue.push(desc.set);
+        }
+      }
+      for (let i = 0; i < syms.length; i++) {
+        const desc = _getOwnPropertyDescriptor(obj, syms[i]);
+        if (desc) {
+          if (desc.value !== undefined) queue.push(desc.value);
+          if (desc.get) queue.push(desc.get);
+          if (desc.set) queue.push(desc.set);
+        }
+      }
+
+      // Walk prototype chain
+      queue.push(_getPrototypeOf(obj));
+    }
+  }
 
   // Poison Function constructor
   const poisonConstructor = () => {
@@ -57,44 +105,10 @@
     writable: false
   });
 
-  // Freeze prototypes (all Error subclasses included to prevent prototype pollution)
-  _freeze(_Array.prototype);
-  _freeze(_Boolean.prototype);
-  _freeze(_Error.prototype);
-  _freeze(_EvalError.prototype);
-  _freeze(_Map.prototype);
-  _freeze(_Number.prototype);
-  _freeze(_Object.prototype);
-  _freeze(_Promise.prototype);
-  _freeze(_RangeError.prototype);
-  _freeze(_ReferenceError.prototype);
-  _freeze(_Set.prototype);
-  _freeze(_String.prototype);
-  _freeze(_SyntaxError.prototype);
-  _freeze(_TypeError.prototype);
-  _freeze(_URIError.prototype);
-  _freeze(Object.getPrototypeOf(syncFunc));
-  _freeze(Object.getPrototypeOf(asyncFunc));
-  _freeze(Object.getPrototypeOf(genFunc));
-  _freeze(Object.getPrototypeOf(asyncGenFunc));
-
-  // Freeze prototypes reachable through literals/builtins despite constructor deletion.
-  // Without these, sandbox code can pollute prototypes across eval blocks.
-  _freeze(RegExp.prototype);                                         // /foo/.constructor.prototype
-  _freeze(Symbol.prototype);                                         // recoverable via getOwnPropertySymbols
-  const _arrIter = [].values();
-  const _ArrayIteratorProto = Object.getPrototypeOf(_arrIter);
-  const _IteratorProto = Object.getPrototypeOf(_ArrayIteratorProto);
-  _freeze(_ArrayIteratorProto);                                      // [].values().__proto__
-  _freeze(_IteratorProto);                                           // IteratorPrototype (parent of all iterators)
-  _freeze(Object.getPrototypeOf(new _Map().values()));               // MapIteratorPrototype
-  _freeze(Object.getPrototypeOf(new _Set().values()));               // SetIteratorPrototype
-  _freeze(Object.getPrototypeOf(""[Symbol.iterator]()));             // StringIteratorPrototype
-
   // Deny-by-default: delete ALL own properties (enumerable and non-enumerable)
   // from globalThis, then restore only the safe allowlist below. This ensures
   // new V8 globals (e.g. WebAssembly, Iterator) are blocked automatically.
-  for (const key of _Object.getOwnPropertyNames(current)) {
+  for (const key of _getOwnPropertyNames(current)) {
     if (key === "globalThis") continue;
     try { delete current[key]; } catch(_) {}
   }
@@ -121,5 +135,8 @@
     value: console, writable: false, configurable: false
   });
 
-  _freeze(current);
+  // Transitively deep-freeze the entire reachable object graph from globalThis.
+  // This covers all restored builtins, their prototypes, prototype chains of
+  // literals (RegExp, Symbol, iterators), and anything else reachable.
+  deepFreeze(current);
 })(globalThis);
