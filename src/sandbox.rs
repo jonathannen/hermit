@@ -182,13 +182,24 @@ fn try_enter_mount_namespace() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Unmount bind-mounts after V8 warmup, leaving a minimal filesystem.
-/// Only /proc/self/maps, /proc/self/status, and /proc/self/fd remain
-/// (needed for V8 GC thread creation). Sensitive files like environ
-/// and cmdline were never mounted.
+/// Only /proc/self/fd remains (needed for V8 GC thread creation).
+/// /proc/self/maps and /proc/self/status are unmounted to prevent
+/// a post-V8-escape attacker from defeating ASLR or reading host info.
+/// Sensitive files like environ and cmdline were never mounted.
 #[cfg(target_os = "linux")]
 pub fn strip_filesystem() {
-    // Unmount /dev/urandom and /sys — no longer needed after V8 init
-    let paths = ["/dev/urandom\0", "/sys/devices/system/cpu\0"];
+    // Unmount everything except /proc/self/fd — no longer needed after V8 init.
+    // /proc/self/maps: V8 reads during init only; leaving it exposes full
+    //   memory layout (ASLR defeat) to a post-escape attacker.
+    // /proc/self/status: leaks outer UID/GID, capability sets, CPU affinity.
+    // /dev/urandom: entropy source, not needed after V8 seeds its RNG.
+    // /sys/devices/system/cpu: CPU topology, not needed after init.
+    let paths = [
+        "/proc/self/maps\0",
+        "/proc/self/status\0",
+        "/dev/urandom\0",
+        "/sys/devices/system/cpu\0",
+    ];
     for path in &paths {
         // SAFETY: umount2 with MNT_DETACH on paths we bind-mounted.
         unsafe {

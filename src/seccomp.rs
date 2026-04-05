@@ -152,7 +152,7 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
         // executable after init. This prevents shellcode injection post-V8-escape.
         allow_mprotect_noexec(&mut rules);
     }
-    allow(&mut rules, libc::SYS_mremap);
+    allow_mremap_no_fixed(&mut rules); // mremap restricted: no MREMAP_FIXED
     allow(&mut rules, libc::SYS_brk);
     allow_safe_madvise(&mut rules);
 
@@ -293,7 +293,7 @@ pub fn install_stage2(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>>
     allow_safe_madvise(&mut rules);        // V8 GC page management (restricted flags)
     allow_mmap_private_only(&mut rules);   // V8 heap growth (private-only, no MAP_SHARED)
     allow(&mut rules, libc::SYS_munmap);   // V8 heap shrink
-    allow(&mut rules, libc::SYS_mremap);   // glibc realloc for large buffers
+    allow_mremap_no_fixed(&mut rules);     // glibc realloc for large buffers (no MREMAP_FIXED)
     allow(&mut rules, libc::SYS_brk);     // glibc malloc for large allocations
 
     // epoll_pwait for tokio event loop
@@ -351,7 +351,11 @@ pub fn install_stage2(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>>
     )?;
 
     let bpf_prog: BpfProgram = filter.try_into()?;
-    seccompiler::apply_filter(&bpf_prog)?;
+    // Use TSYNC to apply stage-2 to ALL threads in the thread group.
+    // V8 may have spawned GC helper threads during warmup; without TSYNC
+    // those threads would keep the wider stage-1 allowlist (which includes
+    // seccomp(2) and umount2). TSYNC ensures every thread gets stage-2.
+    seccompiler::apply_filter_all_threads(&bpf_prog)?;
 
     Ok(())
 }
@@ -446,6 +450,28 @@ fn allow_mprotect_noexec(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
     .expect("valid rule");
 
     rules.insert(libc::SYS_mprotect, vec![rule]);
+}
+
+/// Allow mremap but block MREMAP_FIXED (prevent remapping over arbitrary addresses).
+/// MREMAP_FIXED allows an attacker with arbitrary-read to remap memory over
+/// interesting targets (V8 heap metadata, stack, etc.). V8/glibc only need
+/// MREMAP_MAYMOVE for realloc.
+#[cfg(target_os = "linux")]
+fn allow_mremap_no_fixed(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
+    // mremap(old_addr, old_size, new_size, flags, [new_addr]) - flags is arg3
+    // MREMAP_FIXED = 0x2. Block any call where MREMAP_FIXED is set.
+    const MREMAP_FIXED: u64 = 0x2;
+
+    let rule = SeccompRule::new(vec![SeccompCondition::new(
+        3, // flags argument
+        SeccompCmpArgLen::Dword,
+        SeccompCmpOp::MaskedEq(MREMAP_FIXED),
+        0, // MREMAP_FIXED must not be set
+    )
+    .expect("valid condition")])
+    .expect("valid rule");
+
+    rules.insert(libc::SYS_mremap, vec![rule]);
 }
 
 /// Allow mmap but block MAP_SHARED (prevent shared memory IPC / side-channels)

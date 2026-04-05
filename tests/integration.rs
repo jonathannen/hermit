@@ -828,6 +828,7 @@ fn warmup_does_not_leak_to_user_code() {
 
 /// Spawn hermit and capture stderr (for kernel-boundary tests).
 /// Returns (stdout_lines, stderr_output, exit_code).
+#[cfg(target_os = "linux")]
 fn run_hermit_with_input(args: &[&str], input: &str) -> (Vec<String>, String, i32) {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_hermit"));
     if std::env::var("HERMIT_JIT").is_ok() {
