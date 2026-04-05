@@ -4,7 +4,6 @@ mod sandbox;
 mod seccomp;
 
 use std::fmt;
-use std::io::BufRead;
 use std::time::Duration;
 
 use deno_core::error::AnyError;
@@ -307,11 +306,28 @@ fn spawn_stdin_reader() -> mpsc::UnboundedReceiver<String> {
     let (tx, rx) = mpsc::unbounded_channel();
     std::thread::spawn(move || {
         let stdin = std::io::stdin();
+        let mut reader = std::io::BufReader::new(stdin.lock());
         let mut buffer: Vec<String> = Vec::new();
         let mut buffer_size: usize = 0;
-        for line in stdin.lock().lines() {
-            let line = match line {
-                Ok(l) => l,
+        let mut line_buf = Vec::with_capacity(4096);
+        loop {
+            line_buf.clear();
+            // read_until appends to line_buf until \n or EOF. We check the
+            // accumulated size after each internal fill_buf to bound memory.
+            match read_line_bounded(&mut reader, &mut line_buf, MAX_BLOCK_SIZE) {
+                Ok(0) => break, // EOF
+                Ok(_) => {}
+                Err(ReadLineError::TooLong) => {
+                    eprintln!("fatal: single line exceeds {}MB limit", MAX_BLOCK_SIZE / (1024 * 1024));
+                    std::process::exit(1);
+                }
+                Err(ReadLineError::Io) => break,
+            }
+            // Strip trailing newline/carriage return
+            if line_buf.last() == Some(&b'\n') { line_buf.pop(); }
+            if line_buf.last() == Some(&b'\r') { line_buf.pop(); }
+            let line = match String::from_utf8(std::mem::take(&mut line_buf)) {
+                Ok(s) => s,
                 Err(_) => break,
             };
             if line.is_empty() {
@@ -339,6 +355,44 @@ fn spawn_stdin_reader() -> mpsc::UnboundedReceiver<String> {
         }
     });
     rx
+}
+
+enum ReadLineError {
+    TooLong,
+    Io,
+}
+
+/// Read until \n or EOF, but bail if the line exceeds `limit` bytes.
+fn read_line_bounded<R: std::io::BufRead>(
+    reader: &mut R,
+    buf: &mut Vec<u8>,
+    limit: usize,
+) -> Result<usize, ReadLineError> {
+    let mut total = 0;
+    loop {
+        let available = match reader.fill_buf() {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return Err(ReadLineError::Io),
+        };
+        if available.is_empty() {
+            return Ok(total); // EOF
+        }
+        // Find newline in the buffered data
+        let (used, done) = match available.iter().position(|&b| b == b'\n') {
+            Some(i) => (i + 1, true),
+            None => (available.len(), false),
+        };
+        if total + used > limit {
+            return Err(ReadLineError::TooLong);
+        }
+        buf.extend_from_slice(&available[..used]);
+        total += used;
+        reader.consume(used);
+        if done {
+            return Ok(total);
+        }
+    }
 }
 
 async fn run(
