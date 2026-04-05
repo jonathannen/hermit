@@ -11,6 +11,7 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
 
 const DEFAULT_MEMORY_LIMIT: usize = 128 * 1024 * 1024; // 128MB
+const MIN_MEMORY_LIMIT: usize = 1024 * 1024; // 1MB — V8 needs headroom to initialize
 
 /// Close all file descriptors above stderr (fd > 2).
 /// Must be called before creating the tokio runtime or V8 isolate.
@@ -189,6 +190,11 @@ fn main() {
                     std::process::exit(1);
                 };
                 memory_limit = match parse_memory_limit(&value) {
+                    Ok(v) if v < MIN_MEMORY_LIMIT => {
+                        eprintln!("Error: memory limit must be at least {}MB", MIN_MEMORY_LIMIT / (1024 * 1024));
+                        print_usage();
+                        std::process::exit(1);
+                    }
                     Ok(v) => v,
                     Err(e) => {
                         eprintln!("Error: {}", e);
