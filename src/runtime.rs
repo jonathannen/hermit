@@ -1,5 +1,3 @@
-use std::io::Write;
-
 use deno_core::{JsRuntime, RuntimeOptions, extension};
 
 use crate::ops::op_log;
@@ -25,11 +23,15 @@ extern "C" fn near_heap_limit_callback(
     _current_heap_limit: usize,
     _initial_heap_limit: usize,
 ) -> usize {
-    let mut stderr = std::io::stderr().lock();
-    let _ = writeln!(stderr, "fatal: out of memory - heap limit reached");
-    let _ = stderr.flush();
-
-    std::process::exit(OOM_EXIT_CODE);
+    // Use signal-safe write + _exit instead of std::process::exit to avoid
+    // running atexit handlers and flushing stdio in a potentially corrupted
+    // heap context. This callback fires during GC with the heap in an
+    // unknown state.
+    unsafe {
+        let msg = b"fatal: out of memory - heap limit reached\n";
+        libc::write(2, msg.as_ptr() as *const libc::c_void, msg.len());
+        libc::_exit(OOM_EXIT_CODE);
+    }
 
     #[allow(unreachable_code)]
     _current_heap_limit
