@@ -566,8 +566,8 @@ async fn run(
     js_runtime.execute_script("<warmup>", "1".to_string())?;
     js_runtime.run_event_loop(Default::default()).await?;
 
-    // Strip non-essential filesystem mounts (/dev/urandom, /sys) now that V8
-    // initialization is complete. Only /proc remains for thread creation.
+    // Unmount all remaining bind-mounts, leaving a completely empty filesystem.
+    // V8 initialization is complete; GC threads do not need /proc or /sys.
     sandbox::strip_filesystem();
 
     // Install stage-2 seccomp filter.

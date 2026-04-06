@@ -288,9 +288,9 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
 /// filter changes) and reinforcing all stage-1 restrictions. V8's lazy GC
 /// thread creation means thread/signal syscalls must remain available.
 ///
-/// Remaining attack surface: read-only filesystem (openat), thread creation
-/// (clone with namespace flags blocked), and memory management. For full
-/// filesystem isolation, use a mount namespace or bubblewrap wrapper.
+/// Remaining attack surface: openat (V8 GC attempts /proc reads that fail
+/// harmlessly in the empty namespace), thread creation (clone with namespace
+/// flags blocked), and memory management.
 ///
 /// Call this AFTER running a warmup eval to trigger V8's lazy init.
 #[cfg(target_os = "linux")]
