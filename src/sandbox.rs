@@ -101,7 +101,7 @@ fn try_enter_mount_namespace() -> Result<(), Box<dyn std::error::Error>> {
     let new_root_ptr = new_root_cstr.as_ptr() as *const libc::c_char;
     // SAFETY: mount creates a tmpfs at the target path.
     let ret = unsafe {
-        libc::mount(tmpfs, new_root_ptr, tmpfs, libc::MS_NOSUID | libc::MS_NODEV, none as *const libc::c_void)
+        libc::mount(tmpfs, new_root_ptr, tmpfs, libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC, none as *const libc::c_void)
     };
     if ret != 0 {
         return Err(format!("mount tmpfs: {}", std::io::Error::last_os_error()).into());

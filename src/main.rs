@@ -360,9 +360,9 @@ fn apply_rlimits(mode: sandbox::SandboxMode, memory_limit: usize, timeout: Optio
                 });
             if let Some(vm_kb) = vm_size_kb {
                 let current_bytes = vm_kb * 1024;
-                // Allow current usage + 2x JS heap limit headroom for GC growth,
+                // Allow current usage + 3x JS heap limit headroom for GC growth,
                 // thread stacks, and V8 internal allocations beyond the JS heap.
-                let as_cap = current_bytes.saturating_add((memory_limit as u64) * 2);
+                let as_cap = current_bytes.saturating_add((memory_limit as u64) * 3);
                 let as_limit = rlimit { rlim_cur: as_cap, rlim_max: as_cap };
                 // SAFETY: setrlimit with valid rlimit struct.
                 if unsafe { setrlimit(libc::RLIMIT_AS, &as_limit) } != 0 && strict {
