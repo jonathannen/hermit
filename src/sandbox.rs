@@ -188,7 +188,13 @@ fn try_enter_mount_namespace() -> Result<(), Box<dyn std::error::Error>> {
     }
     let _ = fs::remove_dir("/old_root");
 
-    // 8. Remount root tmpfs read-only. Setup is complete — no more files or
+    // 8. Drop all capabilities. Even inside the user namespace, the process
+    // has full capabilities (CAP_SYS_ADMIN, CAP_NET_RAW, etc.) within that
+    // namespace. Drop them all for defense-in-depth — seccomp already blocks
+    // the dangerous syscalls, but dropping caps adds another layer.
+    drop_capabilities();
+
+    // 9. Remount root tmpfs read-only. Setup is complete — no more files or
     // directories need to be created. This prevents any writes to the tmpfs
     // even if an attacker bypasses the seccomp openat read-only filter.
     // SAFETY: remount on "/" with MS_RDONLY only changes mount flags.
@@ -203,11 +209,32 @@ fn try_enter_mount_namespace() -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("remount / read-only: {}", std::io::Error::last_os_error()).into());
     }
 
-    // 9. chdir to / in the new root
+    // 10. chdir to / in the new root
     // SAFETY: chdir to a valid path.
     unsafe { libc::chdir(c"/".as_ptr()); }
 
     Ok(())
+}
+
+/// Drop all Linux capabilities from the bounding set and ambient set.
+/// Called after namespace setup is complete — we no longer need
+/// CAP_SYS_ADMIN (for mount/pivot_root) or any other capability.
+#[cfg(target_os = "linux")]
+fn drop_capabilities() {
+    const PR_CAP_AMBIENT: libc::c_int = 47;
+    const PR_CAP_AMBIENT_CLEAR_ALL: libc::c_ulong = 4;
+    const PR_CAPBSET_DROP: libc::c_int = 24;
+
+    // Clear all ambient capabilities
+    // SAFETY: prctl with PR_CAP_AMBIENT only modifies process capability sets.
+    unsafe { libc::prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0); }
+
+    // Drop each capability from the bounding set (0..40 covers all current caps)
+    for cap in 0..41i32 {
+        // SAFETY: prctl with PR_CAPBSET_DROP drops a single capability.
+        // Returns EINVAL for invalid cap numbers, which we ignore.
+        unsafe { libc::prctl(PR_CAPBSET_DROP, cap, 0, 0, 0); }
+    }
 }
 
 /// Unmount bind-mounts after V8 warmup, leaving a minimal filesystem.
