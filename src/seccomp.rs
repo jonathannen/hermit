@@ -360,13 +360,14 @@ pub fn install_stage2(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>>
     allow(&mut rules, libc::SYS_rt_sigprocmask);
     allow(&mut rules, libc::SYS_rt_sigreturn);
 
-    // Stacked filter: Trap anything not in stage-2 allowlist.
-    // Since seccomp picks the most restrictive action, this narrows
-    // the stage-1 allowlist without conflicting with it.
+    // Stacked filter: kill the process for anything not in stage-2 allowlist.
+    // Stage-1 uses Trap (SIGSYS) for debugging visibility, but stage-2 uses
+    // KillProcess to eliminate the signal handler race window — a post-escape
+    // attacker cannot corrupt the SIGSYS handler to bypass the filter.
     let filter = SeccompFilter::new(
         rules,
-        SeccompAction::Trap,     // mismatch: block (stage-2 is stricter)
-        SeccompAction::Allow,    // match: allow
+        SeccompAction::KillProcess, // mismatch: immediate kill (no signal handler race)
+        SeccompAction::Allow,       // match: allow
         arch,
     )?;
 
