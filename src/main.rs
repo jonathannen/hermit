@@ -282,7 +282,7 @@ fn main() {
 
 /// Apply OS-level resource limits. Called after runtime init, before seccomp.
 /// In strict mode, setrlimit failures are fatal.
-fn apply_rlimits(mode: sandbox::SandboxMode) {
+fn apply_rlimits(mode: sandbox::SandboxMode, memory_limit: usize, timeout: Option<Duration>) {
     #[cfg(unix)]
     {
         use libc::{rlimit, setrlimit, RLIMIT_FSIZE, RLIMIT_NOFILE};
@@ -313,6 +313,14 @@ fn apply_rlimits(mode: sandbox::SandboxMode) {
             std::process::exit(1);
         }
 
+        // RLIMIT_CORE: prevent core dumps from leaking heap contents.
+        // Belt-and-suspenders with PR_SET_DUMPABLE(0).
+        // SAFETY: setrlimit with valid rlimit struct.
+        if unsafe { setrlimit(libc::RLIMIT_CORE, &zero_limit) } != 0 && strict {
+            eprintln!("fatal: setrlimit(RLIMIT_CORE) failed");
+            std::process::exit(1);
+        }
+
         // RLIMIT_NPROC: cap number of processes/threads. V8 threads are already
         // created, so freeze at current count. This prevents thread explosion.
         #[cfg(target_os = "linux")]
@@ -331,6 +339,54 @@ fn apply_rlimits(mode: sandbox::SandboxMode) {
             // SAFETY: setrlimit with valid rlimit struct.
             if unsafe { setrlimit(RLIMIT_NPROC, &nproc_limit) } != 0 && strict {
                 eprintln!("fatal: setrlimit(RLIMIT_NPROC) failed");
+                std::process::exit(1);
+            }
+        }
+
+        // RLIMIT_AS: cap virtual address space to prevent mmap-based memory
+        // exhaustion outside V8's heap limit. V8 heap limit only covers JS
+        // allocations; this caps the entire process (stack, native heap, mmap).
+        // Read current VmSize from /proc/self/status (V8 has already reserved
+        // its cage + guard regions) and add the JS heap limit as headroom.
+        #[cfg(target_os = "linux")]
+        {
+            let vm_size_kb = std::fs::read_to_string("/proc/self/status")
+                .ok()
+                .and_then(|s| {
+                    s.lines()
+                        .find(|l| l.starts_with("VmSize:"))
+                        .and_then(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok())
+                });
+            if let Some(vm_kb) = vm_size_kb {
+                let current_bytes = vm_kb * 1024;
+                // Allow current usage + 2x JS heap limit headroom for GC growth,
+                // thread stacks, and V8 internal allocations beyond the JS heap.
+                let as_cap = current_bytes.saturating_add((memory_limit as u64) * 2);
+                let as_limit = rlimit { rlim_cur: as_cap, rlim_max: as_cap };
+                // SAFETY: setrlimit with valid rlimit struct.
+                if unsafe { setrlimit(libc::RLIMIT_AS, &as_limit) } != 0 && strict {
+                    eprintln!("fatal: setrlimit(RLIMIT_AS) failed");
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        // RLIMIT_CPU: kernel-enforced hard timeout (SIGKILL on hard limit).
+        // Works even if the watchdog thread is killed or the event loop is stuck.
+        // Soft limit (SIGXCPU) is set to timeout + grace; hard limit (SIGKILL)
+        // adds extra grace so the userspace watchdog fires first under normal
+        // conditions, with RLIMIT_CPU as a backstop.
+        if let Some(t) = timeout {
+            let base_secs = t.as_secs().max(1);
+            // Large grace period: the userspace watchdog handles normal timeouts;
+            // RLIMIT_CPU is a last-resort backstop for cases where the watchdog
+            // thread is dead. JIT mode burns CPU much faster than wall time.
+            let soft = base_secs.saturating_mul(10).max(30);
+            let hard = soft.saturating_add(5);
+            let cpu_limit = rlimit { rlim_cur: soft, rlim_max: hard };
+            // SAFETY: setrlimit with valid rlimit struct.
+            if unsafe { setrlimit(libc::RLIMIT_CPU, &cpu_limit) } != 0 && strict {
+                eprintln!("fatal: setrlimit(RLIMIT_CPU) failed");
                 std::process::exit(1);
             }
         }
@@ -467,7 +523,7 @@ async fn run(
     // Apply OS-level resource limits before entering the sandbox.
     // These act as a backstop for resource exhaustion attacks that bypass V8's
     // heap limit (which only covers the JS heap, not stack, threads, or FDs).
-    apply_rlimits(sandbox_mode);
+    apply_rlimits(sandbox_mode, memory_limit, timeout);
 
     // Tighten RLIMIT_NOFILE to just above current open FD count. V8 and tokio
     // have opened their internal FDs; this caps the total to prevent a post-escape
