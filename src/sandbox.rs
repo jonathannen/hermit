@@ -83,16 +83,25 @@ fn try_enter_mount_namespace() -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("mount MS_PRIVATE: {}", std::io::Error::last_os_error()).into());
     }
 
-    // 4. Create a tmpfs for the new root
-    let new_root = "/tmp/hermit-root\0";
-    let new_root_path = std::path::Path::new("/tmp/hermit-root");
-    fs::create_dir_all(new_root_path)?;
+    // 4. Create a tmpfs for the new root (unique per-run to avoid races)
+    let mut template = b"/tmp/hermit-XXXXXX\0".to_vec();
+    // SAFETY: mkdtemp modifies the template in-place, replacing XXXXXX with
+    // a unique suffix. The buffer is properly null-terminated.
+    let result = unsafe { libc::mkdtemp(template.as_mut_ptr() as *mut libc::c_char) };
+    if result.is_null() {
+        return Err(format!("mkdtemp: {}", std::io::Error::last_os_error()).into());
+    }
+    // Strip the null terminator for Rust string usage
+    let new_root_str = std::str::from_utf8(&template[..template.len() - 1])
+        .map_err(|_| "mkdtemp returned non-UTF8 path")?
+        .to_string();
 
     let tmpfs = c"tmpfs".as_ptr();
-    let new_root_cstr = new_root.as_ptr() as *const libc::c_char;
+    let new_root_cstr = format!("{}\0", new_root_str);
+    let new_root_ptr = new_root_cstr.as_ptr() as *const libc::c_char;
     // SAFETY: mount creates a tmpfs at the target path.
     let ret = unsafe {
-        libc::mount(tmpfs, new_root_cstr, tmpfs, libc::MS_NOSUID | libc::MS_NODEV, none as *const libc::c_void)
+        libc::mount(tmpfs, new_root_ptr, tmpfs, libc::MS_NOSUID | libc::MS_NODEV, none as *const libc::c_void)
     };
     if ret != 0 {
         return Err(format!("mount tmpfs: {}", std::io::Error::last_os_error()).into());
@@ -107,15 +116,18 @@ fn try_enter_mount_namespace() -> Result<(), Box<dyn std::error::Error>> {
     //
     //    Sensitive /proc files (environ, cmdline, mountinfo) are NOT mounted,
     //    preventing a post-V8-escape attacker from reading host secrets.
-    let binds: &[(&str, &str)] = &[
-        ("/proc/self/maps", "/tmp/hermit-root/proc/self/maps"),
-        ("/proc/self/status", "/tmp/hermit-root/proc/self/status"),
-        ("/proc/self/fd", "/tmp/hermit-root/proc/self/fd"),
-        ("/sys/devices/system/cpu", "/tmp/hermit-root/sys/devices/system/cpu"),
-        ("/dev/urandom", "/tmp/hermit-root/dev/urandom"),
+    let bind_srcs = [
+        "/proc/self/maps",
+        "/proc/self/status",
+        "/proc/self/fd",
+        "/sys/devices/system/cpu",
+        "/dev/urandom",
     ];
+    let bind_dsts: Vec<String> = bind_srcs.iter()
+        .map(|src| format!("{}{}", new_root_str, src))
+        .collect();
 
-    for (src, dst) in binds {
+    for (src, dst) in bind_srcs.iter().zip(bind_dsts.iter()) {
         let dst_path = std::path::Path::new(dst);
         if std::path::Path::new(src).is_dir() {
             fs::create_dir_all(dst_path)?;
@@ -146,8 +158,8 @@ fn try_enter_mount_namespace() -> Result<(), Box<dyn std::error::Error>> {
 
     // 6. pivot_root: swap root to our minimal tree
     // We need an old_root directory inside the new root for pivot_root
-    let old_root = "/tmp/hermit-root/old_root";
-    fs::create_dir_all(old_root)?;
+    let old_root = format!("{}/old_root", new_root_str);
+    fs::create_dir_all(&old_root)?;
 
     let old_root_cstr = format!("{}\0", old_root);
     // SAFETY: pivot_root swaps the filesystem root. Process must have CAP_SYS_ADMIN
@@ -155,7 +167,7 @@ fn try_enter_mount_namespace() -> Result<(), Box<dyn std::error::Error>> {
     let ret = unsafe {
         libc::syscall(
             libc::SYS_pivot_root,
-            new_root_cstr,
+            new_root_ptr,
             old_root_cstr.as_ptr() as *const libc::c_char,
         )
     };
