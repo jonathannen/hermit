@@ -1,3 +1,4 @@
+mod landlock;
 mod ops;
 mod runtime;
 mod sandbox;
@@ -529,6 +530,29 @@ async fn run(
     // have opened their internal FDs; this caps the total to prevent a post-escape
     // attacker from opening new ones. Must run before seccomp (fstat is blocked).
     tighten_nofile_limit();
+
+    // Set NO_NEW_PRIVS early — required by both Landlock and seccomp.
+    // Idempotent: seccomp::install() will set it again (harmless).
+    #[cfg(target_os = "linux")]
+    unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); }
+
+    // Landlock: restrict filesystem to read-only at the LSM layer, independent
+    // of seccomp. Even if seccomp is bypassed via a kernel bug, Landlock still
+    // enforces. Best-effort: silently skipped on kernels < 5.13.
+    match landlock::restrict_filesystem() {
+        Ok(true) => {} // Landlock active
+        Ok(false) => {
+            if sandbox_mode == sandbox::SandboxMode::Strict {
+                eprintln!("warning: Landlock not available, continuing without LSM filesystem restriction");
+            }
+        }
+        Err(e) => {
+            if sandbox_mode == sandbox::SandboxMode::Strict {
+                eprintln!("fatal: Landlock setup failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
 
     // Install stage-1 seccomp filter (Linux only, no-op on macOS)
     seccomp::install(allow_jit).map_err(|e| {
