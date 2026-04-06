@@ -209,7 +209,7 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
     allow(&mut rules, libc::SYS_getpid); // x86_64 tokio signal handling needs getpid
     allow(&mut rules, libc::SYS_gettid); // V8 needs for thread-local ops
     #[cfg(target_arch = "x86_64")]
-    allow(&mut rules, libc::SYS_arch_prctl); // x86_64 TLS setup
+    allow_arch_prctl_fs_only(&mut rules); // x86_64 TLS setup (ARCH_SET_FS/GET_FS only)
     // prlimit64: BLOCKED — V8 checks resource limits at init only
     // getrandom: BLOCKED — V8/tokio seed their RNGs during init before seccomp
     #[cfg(target_arch = "aarch64")]
@@ -351,7 +351,7 @@ pub fn install_stage2(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>>
     allow(&mut rules, libc::SYS_sched_yield);
     allow(&mut rules, libc::SYS_clock_nanosleep); // V8 GC helper thread backoff
     allow(&mut rules, libc::SYS_gettid);
-    allow(&mut rules, libc::SYS_sigaltstack);
+    allow(&mut rules, libc::SYS_sigaltstack); // V8 thread init sets up alt signal stacks
     // prctl restricted to safe operations (thread naming)
     allow_safe_prctl(&mut rules);
     #[cfg(target_arch = "aarch64")]
@@ -620,6 +620,28 @@ fn allow_openat_readonly(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
     .expect("valid rule");
 
     rules.insert(libc::SYS_openat, vec![rule]);
+}
+
+/// Allow arch_prctl only for FS register operations (TLS setup).
+/// Blocks ARCH_SET_GS, ARCH_GET_GS, ARCH_SET_CPUID, etc. which could be
+/// used to redirect TLS-based data structures (stack canary, errno).
+#[cfg(target_os = "linux")]
+#[cfg(target_arch = "x86_64")]
+fn allow_arch_prctl_fs_only(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
+    // arch_prctl(code, addr) - code is arg0
+    const ARCH_SET_FS: u64 = 0x1002;
+    const ARCH_GET_FS: u64 = 0x1003;
+
+    let arch_prctl_rules = vec![
+        SeccompRule::new(vec![SeccompCondition::new(0, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, ARCH_SET_FS)
+            .expect("valid")])
+        .expect("valid"),
+        SeccompRule::new(vec![SeccompCondition::new(0, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, ARCH_GET_FS)
+            .expect("valid")])
+        .expect("valid"),
+    ];
+
+    rules.insert(libc::SYS_arch_prctl, arch_prctl_rules);
 }
 
 /// Allow clone only for thread creation.
