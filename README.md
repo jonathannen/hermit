@@ -20,7 +20,7 @@ There are already tools that help on the untrusted side, but they were either to
 
 Hermit gives you the primitives to do this. You've given a vary narrow window - stdio message passing. On top of this you can construct any protocol you like.
 
-On Linux, Hermit layers mount namespaces, two-stage seccomp, and rlimits on top of V8's process-level isolation. It's a single binary with no runtime dependencies.
+On Linux, Hermit layers mount namespaces, Landlock, two-stage seccomp, and rlimits on top of V8's process-level isolation. It's a single binary with no runtime dependencies.
 
 ## Example
 
@@ -47,13 +47,15 @@ Note: You can also substitute `hermit` for `cargo run` as you like.
 
 - **[V8 Isolate](https://v8.dev/docs/embed#isolates)** — each instance of Hermit runs its own V8 isolate, the same process-level sandbox that Chrome uses to separate tabs. V8 is run with `--disallow-code-generation-from-strings` and by default no JIT.
 - **Frozen globals** — the JavaScript environment is stripped down to a minimal set of builtins (`Array`, `Object`, `Promise`, `JSON`, etc.) with no `Date`, `Math`, `Proxy`, `eval`, typed arrays, or access to `Deno`/`Node` APIs. `globalThis` and all reachable prototypes are transitively deep-frozen, including prototypes only reachable via syntax literals (generators, async generators, `RegExp`, `BigInt`), V8-thrown exceptions (`ReferenceError`, `SyntaxError`, `URIError`), builtin operations (`AggregateError` via `Promise.any`, `%RegExpStringIteratorPrototype%` via `matchAll`), and all iterator prototypes. The `Function` constructor is poisoned on all function-kind prototypes.
-- **[Mount namespace](https://man7.org/linux/man-pages/man7/mount_namespaces.7.html)** (Linux) — on startup, Hermit creates a new user and mount namespace and pivots to a minimal tmpfs root. During V8 initialization only `/proc/self/maps`, `/proc/self/status`, `/proc/self/fd`, `/sys/devices/system/cpu`, and `/dev/urandom` are visible. After warmup, `/proc/self/maps`, `/proc/self/status`, `/dev/urandom`, and `/sys` are unmounted — only `/proc/self/fd` remains. This prevents a post-escape attacker from reading `/proc/self/maps` (ASLR defeat) or `/proc/self/status` (host info leak). The host filesystem (source trees, secrets, `/etc`) is never reachable. In `--strict` mode (the Linux default), failure to create the namespace is fatal. In `--permissive` mode, Hermit warns and continues without filesystem isolation.
+- **[Mount namespace](https://man7.org/linux/man-pages/man7/mount_namespaces.7.html)** (Linux) — on startup, Hermit creates a new user and mount namespace and pivots to a unique-per-run tmpfs root (created via `mkdtemp`). The tmpfs is mounted with `MS_NOSUID|MS_NODEV|MS_NOEXEC` and remounted read-only after setup completes. During V8 initialization only `/proc/self/maps`, `/proc/self/status`, `/proc/self/fd`, `/sys/devices/system/cpu`, and `/dev/urandom` are visible. After warmup, `/proc/self/maps`, `/proc/self/status`, `/dev/urandom`, and `/sys` are unmounted — only `/proc/self/fd` remains. This prevents a post-escape attacker from reading `/proc/self/maps` (ASLR defeat) or `/proc/self/status` (host info leak). The host filesystem (source trees, secrets, `/etc`) is never reachable. In `--strict` mode (the Linux default), failure to create the namespace is fatal. In `--permissive` mode, Hermit warns and continues without filesystem isolation.
 - **[Seccomp](https://man7.org/linux/man-pages/man2/seccomp.2.html)** (Linux) — a two-stage syscall filter that restricts what the process can do at the kernel level, even if the V8 sandbox is escaped. Stage 1 is installed after V8 initialization and blocks networking, exec, fork, timing, and most filesystem operations. A warmup eval then triggers V8's lazy initialization. Stage 2 is applied with `SECCOMP_FILTER_FLAG_TSYNC` to cover all threads (including V8 GC threads spawned during warmup), locks down further, and blocks the `seccomp` syscall itself — preventing a post-escape attacker from loosening the filter from any thread. Argument-level filtering restricts `clone` to require `CLONE_THREAD` (no fork/namespace escape), `mmap` to `MAP_PRIVATE` only (no shared memory), `mremap` to block `MREMAP_FIXED` (no remapping over arbitrary targets), `mprotect` to block `PROT_EXEC` in jitless mode (no executable pages), `madvise` to safe flags, and `openat` to read-only. `clone3` is forced to return `ENOSYS` via a stacked filter so glibc falls back to the filterable `clone` syscall.
+- **[Landlock](https://docs.kernel.org/userspace-api/landlock.html)** (Linux 5.13+) — after the mount namespace is set up, Hermit applies Landlock LSM rules that restrict the entire filesystem to read-only. This provides an independent security layer: even if seccomp is bypassed via a kernel bug, Landlock still enforces path-level access control. Best-effort — silently skipped on older kernels.
 - **FD hygiene** — all inherited file descriptors above stderr are closed before any runtime initialization, preventing interaction with FDs the parent may have left open.
-- **Resource limits** — `RLIMIT_NOFILE` (capped at 64), `RLIMIT_FSIZE` (zero — no file writes), and `RLIMIT_NPROC` (frozen at current thread count + headroom) are set automatically. V8 heap limits and per-eval timeouts are configurable via `--memory-limit` and `--timeout`.
+- **Resource limits** — `RLIMIT_NOFILE` (capped at 64, tightened after init), `RLIMIT_FSIZE` (zero — no file writes), `RLIMIT_NPROC` (frozen at current thread count + headroom), `RLIMIT_CORE` (zero — no core dumps), `RLIMIT_AS` (current virtual memory + headroom — caps total address space), and `RLIMIT_CPU` (kernel-enforced hard timeout when `--timeout` is set — backstop that works even if the watchdog thread is dead) are set automatically. V8 heap limits and per-eval timeouts are configurable via `--memory-limit` and `--timeout`.
 - **prctl hardening** — `PR_SET_DUMPABLE` is disabled (no core dumps or ptrace attachment) and `PR_SET_NO_NEW_PRIVS` is set (no privilege escalation via execve).
+- **Architecture validation** — seccomp filters include an `AUDIT_ARCH` check that kills the process on architecture mismatch, blocking 32-bit compat syscall bypass attempts on 64-bit kernels.
 
-Note: Seccomp and mount namespaces are Linux only. There is a Mac build for local development only.
+Note: Seccomp, mount namespaces, and Landlock are Linux only. There is a Mac build for local development only.
 
 ## Security Considerations
 
@@ -95,7 +97,7 @@ cargo test
 
 - **macOS sandbox**: Seccomp and mount namespaces only apply on Linux. A similar set of entitlements for macOS (e.g. `sandbox_init`, App Sandbox) would be valuable.
 - **Pooling**: Unclear whether pooling isolates should be Hermit's job or its host's.
-- **Hardening**: Contributions are welcome. Potential areas: cgroup-based resource limits.
+- **Hardening**: Contributions are welcome. Potential areas: cgroup-based resource limits, `PR_SET_MDWE` (kernel-enforced W^X on Linux 6.3+), futex flag restriction, `CLONE_NEWPID`/`CLONE_NEWNET` namespaces, explicit capability dropping.
 
 ## Alternatives
 
@@ -111,7 +113,7 @@ There are several ways to sandbox JavaScript. Each makes different trade-offs be
 
 **[Cloudflare Workers](https://workers.cloudflare.com/)** / **[Deno Deploy](https://deno.com/deploy)** — managed V8 isolate platforms. These are specific to those vendors. Cloudflare have the Open Source [workerd](https://github.com/cloudflare/workerd) based off Workers.
 
-**Hermit** sits in a specific niche: V8 performance and full JS semantics (including async/await), with the smallest possible API surface (just `console.log`), defence-in-depth sandboxing (V8 isolate + mount namespace + two-stage seccomp + frozen globals + rlimits + FD hygiene), and a dead-simple stdio protocol. It's a raw primitive — you build the protocol, the host, and the orchestration yourself.
+**Hermit** sits in a specific niche: V8 performance and full JS semantics (including async/await), with the smallest possible API surface (just `console.log`), defence-in-depth sandboxing (V8 isolate + mount namespace + Landlock + two-stage seccomp + frozen globals + rlimits + FD hygiene), and a dead-simple stdio protocol. It's a raw primitive — you build the protocol, the host, and the orchestration yourself.
 
 ## Giants
 
