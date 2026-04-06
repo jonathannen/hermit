@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 
 /// Apply prctl hardening. Call before seccomp.
 #[cfg(target_os = "linux")]
-fn apply_prctl_restrictions() -> Result<(), Box<dyn std::error::Error>> {
+fn apply_prctl_restrictions(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
     use libc::{prctl, PR_SET_DUMPABLE, PR_SET_NO_NEW_PRIVS};
 
     // Prevent ptrace attachment and core dumps (anti-debugging/tampering)
@@ -29,6 +29,26 @@ fn apply_prctl_restrictions() -> Result<(), Box<dyn std::error::Error>> {
     // SAFETY: prctl with PR_SET_NO_NEW_PRIVS only sets a process flag, no pointer args.
     if unsafe { prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0 {
         return Err("prctl(PR_SET_NO_NEW_PRIVS) failed".into());
+    }
+
+    // PR_SET_MDWE (Memory-Deny-Write-Execute): kernel-enforced W^X policy.
+    // When set, all future mmap/mprotect calls that would create pages that
+    // are both writable and executable are rejected by the kernel. This is
+    // belt-and-suspenders with our seccomp mprotect(PROT_EXEC) filter.
+    // Only in jitless mode — JIT needs to make pages executable.
+    // Best-effort: returns EINVAL on kernels < 6.3 where MDWE is unavailable.
+    if !allow_jit {
+        const PR_SET_MDWE: libc::c_int = 65;
+        const PR_MDWE_REFUSE_EXEC_GAIN: libc::c_ulong = 1;
+        // SAFETY: prctl with PR_SET_MDWE only sets a process flag.
+        let ret = unsafe { prctl(PR_SET_MDWE, PR_MDWE_REFUSE_EXEC_GAIN, 0, 0, 0) };
+        if ret != 0 {
+            // EINVAL = kernel too old, not an error. Other failures are unexpected.
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() != Some(libc::EINVAL) {
+                return Err(format!("prctl(PR_SET_MDWE) failed: {}", err).into());
+            }
+        }
     }
 
     Ok(())
@@ -115,7 +135,7 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
     install_sigsys_handler();
 
     // Apply prctl restrictions first
-    apply_prctl_restrictions()?;
+    apply_prctl_restrictions(allow_jit)?;
 
     // Default action: trap to report blocked syscall
     let default_action = SeccompAction::Trap;
