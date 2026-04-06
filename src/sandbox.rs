@@ -158,6 +158,26 @@ fn try_enter_mount_namespace() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // 5b. Remount /proc/self/fd bind-mount with restrictive options.
+    // This is the only /proc path that survives strip_filesystem(), so
+    // hardening it limits FD re-opening tricks via /proc/self/fd/*.
+    {
+        let fd_dst = format!("{}/proc/self/fd\0", new_root_str);
+        // SAFETY: remount on an existing bind mount, only changes flags.
+        let ret = unsafe {
+            libc::mount(
+                none,
+                fd_dst.as_ptr() as *const libc::c_char,
+                none,
+                libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC,
+                none as *const libc::c_void,
+            )
+        };
+        if ret != 0 {
+            return Err(format!("remount /proc/self/fd: {}", std::io::Error::last_os_error()).into());
+        }
+    }
+
     // 6. pivot_root: swap root to our minimal tree
     // We need an old_root directory inside the new root for pivot_root
     let old_root = format!("{}/old_root", new_root_str);
@@ -262,6 +282,7 @@ pub fn strip_filesystem() {
             libc::umount2(path.as_ptr() as *const libc::c_char, libc::MNT_DETACH);
         }
     }
+
 }
 
 #[cfg(not(target_os = "linux"))]
