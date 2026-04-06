@@ -97,7 +97,7 @@ cargo test
 
 - **macOS sandbox**: Seccomp and mount namespaces only apply on Linux. A similar set of entitlements for macOS (e.g. `sandbox_init`, App Sandbox) would be valuable.
 - **Pooling**: Unclear whether pooling isolates should be Hermit's job or its host's.
-- **Hardening**: Contributions are welcome. Potential areas: cgroup-based resource limits, `PR_SET_MDWE` (kernel-enforced W^X on Linux 6.3+), futex flag restriction, `CLONE_NEWPID`/`CLONE_NEWNET` namespaces, explicit capability dropping.
+- **Hardening**: Contributions are welcome.
 
 ## Alternatives
 
