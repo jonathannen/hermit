@@ -2,11 +2,17 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
+use std::time::Duration;
+
+/// Default timeout for read_line — prevents tests from hanging forever
+/// if expected output never arrives.
+const READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 struct Hermit {
     child: Child,
     stdin: std::process::ChildStdin,
-    reader: BufReader<std::process::ChildStdout>,
+    line_rx: mpsc::Receiver<String>,
 }
 
 impl Hermit {
@@ -34,11 +40,27 @@ impl Hermit {
 
         let mut child = cmd.spawn().expect("failed to spawn");
         let stdin = child.stdin.take().unwrap();
-        let reader = BufReader::new(child.stdout.take().unwrap());
+        let stdout = child.stdout.take().unwrap();
+        let (line_tx, line_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {
+                        if line_tx.send(line.trim_end().to_string()).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
         Self {
             child,
             stdin,
-            reader,
+            line_rx,
         }
     }
 
@@ -56,16 +78,17 @@ impl Hermit {
     }
 
     fn read_line(&mut self) -> String {
-        let mut line = String::new();
-        let n = self
-            .reader
-            .read_line(&mut line)
-            .expect("failed to read line");
-        if n == 0 {
-            let status = self.child.try_wait().ok().flatten();
-            panic!("process died unexpectedly, exit status: {:?}", status);
+        match self.line_rx.recv_timeout(READ_TIMEOUT) {
+            Ok(line) => line,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let status = self.child.try_wait().ok().flatten();
+                panic!("read_line timed out after {:?}, process status: {:?}", READ_TIMEOUT, status);
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let status = self.child.try_wait().ok().flatten();
+                panic!("process died unexpectedly, exit status: {:?}", status);
+            }
         }
-        line.trim_end().to_string()
     }
 
     fn shutdown(mut self) -> i32 {
@@ -1430,6 +1453,44 @@ fn seccomp_stage2_kills_on_violation() {
     assert_eq!(code, 0, "stage-2 should allow normal ops; stderr: {}", stderr);
     assert!(!stderr.contains("SECCOMP BLOCKED"), "unexpected seccomp trap in stage-2: {}", stderr);
     assert_eq!(stdout.len(), 10);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn seccomp_covers_v8_lazy_paths() {
+    // Exercise V8 lazy initialization paths that might first trigger under
+    // stage-2 seccomp. If any of these need syscalls not in the stage-2
+    // allowlist, the process will be killed.
+    let mut c = Hermit::spawn_with_args(&["--timeout", "5s"]);
+    // Regexp compilation
+    c.eval(r#"console.log("2024-01-15".match(/\d{4}-\d{2}-\d{2}/)[0])"#);
+    assert_eq!(c.read_line(), "2024-01-15");
+
+    // Error stack formatting
+    c.eval(r#"try { undefined.x; } catch(e) { console.log(typeof e.stack); }"#);
+    assert_eq!(c.read_line(), "string");
+
+    // JSON parse/stringify
+    c.eval(r#"console.log(JSON.stringify({a: 1.5, b: "hello"}))"#);
+    assert_eq!(c.read_line(), r#"{"a":1.5,"b":"hello"}"#);
+
+    // Promise.all (microtask scheduling)
+    c.eval(r#"Promise.all([Promise.resolve(10), Promise.resolve(20)]).then(([a, b]) => console.log(a + b))"#);
+    assert_eq!(c.read_line(), "30");
+
+    // Map/Set iteration
+    c.eval(r#"{ const m = new Map([["a",1],["b",2]]); let s=0; for(const[,v]of m)s+=v; console.log(s); }"#);
+    assert_eq!(c.read_line(), "3");
+
+    // String ops (ICU paths)
+    c.eval(r#"console.log("HELLO".toLowerCase())"#);
+    assert_eq!(c.read_line(), "hello");
+
+    // Large string concat (rope flattening)
+    c.eval(r#"{ let s="x"; for(let i=0;i<20;i++)s=s+s; console.log(s.length); }"#);
+    assert_eq!(c.read_line(), "1048576");
+
+    assert_eq!(c.shutdown(), 0);
 }
 
 #[test]
