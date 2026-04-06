@@ -49,10 +49,12 @@ fn try_enter_mount_namespace() -> Result<(), Box<dyn std::error::Error>> {
     let uid = unsafe { libc::getuid() };
     let gid = unsafe { libc::getgid() };
 
-    // 1. Create new user + mount namespace (unprivileged)
+    // 1. Create new user + mount + network namespace (unprivileged)
+    // CLONE_NEWNET: empty network stack (no interfaces, no sockets),
+    //   eliminating network access without needing socket syscall filtering.
     // SAFETY: unshare only affects the calling thread's namespace membership.
     let ret = unsafe {
-        libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNS)
+        libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNS | libc::CLONE_NEWNET)
     };
     if ret != 0 {
         return Err(format!("unshare: {}", std::io::Error::last_os_error()).into());
