@@ -112,16 +112,15 @@ fn try_enter_mount_namespace() -> Result<(), Box<dyn std::error::Error>> {
     // 5. Bind-mount only the paths V8 needs during initialization:
     //    - /proc/self/maps (V8 reads memory layout)
     //    - /proc/self/status (V8 reads process info, rlimit reads thread count)
-    //    - /proc/self/fd (FD hygiene close_inherited_fds)
     //    - /sys/devices/system/cpu (for CPU topology)
     //    - /dev/urandom (for entropy)
     //
+    //    /proc/self/fd is NOT mounted — V8 GC threads don't need it.
     //    Sensitive /proc files (environ, cmdline, mountinfo) are NOT mounted,
     //    preventing a post-V8-escape attacker from reading host secrets.
     let bind_srcs = [
         "/proc/self/maps",
         "/proc/self/status",
-        "/proc/self/fd",
         "/sys/devices/system/cpu",
         "/dev/urandom",
     ];
@@ -155,26 +154,6 @@ fn try_enter_mount_namespace() -> Result<(), Box<dyn std::error::Error>> {
         };
         if ret != 0 {
             return Err(format!("bind mount {} -> {}: {}", src, dst, std::io::Error::last_os_error()).into());
-        }
-    }
-
-    // 5b. Remount /proc/self/fd bind-mount with restrictive options.
-    // This is the only /proc path that survives strip_filesystem(), so
-    // hardening it limits FD re-opening tricks via /proc/self/fd/*.
-    {
-        let fd_dst = format!("{}/proc/self/fd\0", new_root_str);
-        // SAFETY: remount on an existing bind mount, only changes flags.
-        let ret = unsafe {
-            libc::mount(
-                none,
-                fd_dst.as_ptr() as *const libc::c_char,
-                none,
-                libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC,
-                none as *const libc::c_void,
-            )
-        };
-        if ret != 0 {
-            return Err(format!("remount /proc/self/fd: {}", std::io::Error::last_os_error()).into());
         }
     }
 
@@ -257,19 +236,11 @@ fn drop_capabilities() {
     }
 }
 
-/// Unmount bind-mounts after V8 warmup, leaving a minimal filesystem.
-/// Only /proc/self/fd remains (needed for V8 GC thread creation).
-/// /proc/self/maps and /proc/self/status are unmounted to prevent
-/// a post-V8-escape attacker from defeating ASLR or reading host info.
-/// Sensitive files like environ and cmdline were never mounted.
+/// Unmount all bind-mounts after V8 warmup, leaving a completely empty
+/// filesystem (Cloudflare model). Nothing remains — no /proc, no /sys,
+/// no /dev. A post-escape attacker has no filesystem to work with.
 #[cfg(target_os = "linux")]
 pub fn strip_filesystem() {
-    // Unmount everything except /proc/self/fd — no longer needed after V8 init.
-    // /proc/self/maps: V8 reads during init only; leaving it exposes full
-    //   memory layout (ASLR defeat) to a post-escape attacker.
-    // /proc/self/status: leaks outer UID/GID, capability sets, CPU affinity.
-    // /dev/urandom: entropy source, not needed after V8 seeds its RNG.
-    // /sys/devices/system/cpu: CPU topology, not needed after init.
     let paths = [
         "/proc/self/maps\0",
         "/proc/self/status\0",
@@ -282,7 +253,6 @@ pub fn strip_filesystem() {
             libc::umount2(path.as_ptr() as *const libc::c_char, libc::MNT_DETACH);
         }
     }
-
 }
 
 #[cfg(not(target_os = "linux"))]
