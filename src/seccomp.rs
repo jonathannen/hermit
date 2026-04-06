@@ -176,8 +176,8 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
     allow(&mut rules, libc::SYS_brk);
     allow_safe_madvise(&mut rules);
 
-    // Futex (V8 internal locking - unfortunately required)
-    allow(&mut rules, libc::SYS_futex);
+    // Futex (V8 internal locking - restricted to safe ops, blocking PI variants)
+    allow_safe_futex(&mut rules);
 
     // Signals
     allow_sigaction_protect_sigsys(&mut rules); // block overriding our SIGSYS handler
@@ -309,7 +309,7 @@ pub fn install_stage2(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>>
     allow(&mut rules, libc::SYS_write);   // console.log output
     allow(&mut rules, libc::SYS_close);   // thread cleanup
     allow_openat_readonly(&mut rules);    // thread init reads /proc, /sys
-    allow(&mut rules, libc::SYS_futex);   // V8 thread synchronization
+    allow_safe_futex(&mut rules);          // V8 thread synchronization (PI ops blocked)
     allow_safe_madvise(&mut rules);        // V8 GC page management (restricted flags)
     allow_mmap_private_only(&mut rules);   // V8 heap growth (private-only, no MAP_SHARED)
     allow(&mut rules, libc::SYS_munmap);   // V8 heap shrink
@@ -547,6 +547,52 @@ fn allow_safe_prctl(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
     ];
 
     rules.insert(libc::SYS_prctl, prctl_rules);
+}
+
+/// Allow futex but block dangerous operations (FUTEX_CMP_REQUEUE_PI, etc.)
+/// FUTEX_CMP_REQUEUE_PI has been a repeated source of kernel vulnerabilities.
+/// Chrome's RestrictFutex() blocks it. V8 only needs basic wait/wake ops.
+#[cfg(target_os = "linux")]
+fn allow_safe_futex(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
+    // futex(uaddr, op, val, ...) - op is arg1
+    // The futex command is in the low 7 bits (FUTEX_CMD_MASK = 0x7f).
+    // FUTEX_LOCK_PI (6), FUTEX_UNLOCK_PI (7), FUTEX_TRYLOCK_PI (8),
+    // FUTEX_CMP_REQUEUE_PI (12), FUTEX_WAIT_REQUEUE_PI (11) are PI ops
+    // we don't need. Block all PI-related ops by allowing only the safe set.
+    const FUTEX_CMD_MASK: u64 = 0x7f;
+    const FUTEX_WAIT: u64 = 0;
+    const FUTEX_WAKE: u64 = 1;
+    const FUTEX_REQUEUE: u64 = 3;
+    const FUTEX_CMP_REQUEUE: u64 = 4;
+    const FUTEX_WAKE_OP: u64 = 5;
+    const FUTEX_WAIT_BITSET: u64 = 9;
+    const FUTEX_WAKE_BITSET: u64 = 10;
+
+    let futex_rules = vec![
+        SeccompRule::new(vec![SeccompCondition::new(1, SeccompCmpArgLen::Dword, SeccompCmpOp::MaskedEq(FUTEX_CMD_MASK), FUTEX_WAIT)
+            .expect("valid")])
+        .expect("valid"),
+        SeccompRule::new(vec![SeccompCondition::new(1, SeccompCmpArgLen::Dword, SeccompCmpOp::MaskedEq(FUTEX_CMD_MASK), FUTEX_WAKE)
+            .expect("valid")])
+        .expect("valid"),
+        SeccompRule::new(vec![SeccompCondition::new(1, SeccompCmpArgLen::Dword, SeccompCmpOp::MaskedEq(FUTEX_CMD_MASK), FUTEX_REQUEUE)
+            .expect("valid")])
+        .expect("valid"),
+        SeccompRule::new(vec![SeccompCondition::new(1, SeccompCmpArgLen::Dword, SeccompCmpOp::MaskedEq(FUTEX_CMD_MASK), FUTEX_CMP_REQUEUE)
+            .expect("valid")])
+        .expect("valid"),
+        SeccompRule::new(vec![SeccompCondition::new(1, SeccompCmpArgLen::Dword, SeccompCmpOp::MaskedEq(FUTEX_CMD_MASK), FUTEX_WAKE_OP)
+            .expect("valid")])
+        .expect("valid"),
+        SeccompRule::new(vec![SeccompCondition::new(1, SeccompCmpArgLen::Dword, SeccompCmpOp::MaskedEq(FUTEX_CMD_MASK), FUTEX_WAIT_BITSET)
+            .expect("valid")])
+        .expect("valid"),
+        SeccompRule::new(vec![SeccompCondition::new(1, SeccompCmpArgLen::Dword, SeccompCmpOp::MaskedEq(FUTEX_CMD_MASK), FUTEX_WAKE_BITSET)
+            .expect("valid")])
+        .expect("valid"),
+    ];
+
+    rules.insert(libc::SYS_futex, futex_rules);
 }
 
 /// Allow openat only for read-only opens (block write, create, truncate, append, path-only)
