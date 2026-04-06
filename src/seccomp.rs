@@ -305,10 +305,12 @@ pub fn install_stage2(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>>
     // Steady-state syscalls only — verified via strace across 50+ evals
     // with heap pressure in both jitless and JIT modes.
 
-    allow(&mut rules, libc::SYS_read);    // stdin input + thread init /proc reads
+    allow(&mut rules, libc::SYS_read);    // stdin input
     allow(&mut rules, libc::SYS_write);   // console.log output
     allow(&mut rules, libc::SYS_close);   // thread cleanup
-    allow_openat_readonly(&mut rules);    // thread init reads /proc, /sys
+    allow_openat_readonly(&mut rules);    // V8 GC threads attempt to open /proc files
+                                           // during collection (fails harmlessly in empty
+                                           // namespace, but the syscall must be allowed)
     allow_safe_futex(&mut rules);          // V8 thread synchronization (PI ops blocked)
     allow_safe_madvise(&mut rules);        // V8 GC page management (restricted flags)
     allow_mmap_private_only(&mut rules);   // V8 heap growth (private-only, no MAP_SHARED)
