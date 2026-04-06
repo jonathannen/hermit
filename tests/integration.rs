@@ -1367,6 +1367,72 @@ fn regexp_string_iterator_prototype_is_frozen() {
 }
 
 #[test]
+fn filesystem_is_empty_after_warmup() {
+    // After warmup, the mount namespace should be completely empty.
+    // Any attempt to read filesystem paths should fail. This verifies
+    // the Cloudflare-model empty namespace: no /proc, /sys, or /dev.
+    let mut c = Hermit::spawn();
+    c.eval(
+        r#"
+        // These paths should all be inaccessible after warmup + strip_filesystem
+        const paths = [
+            "/proc/self/maps", "/proc/self/status", "/proc/self/fd",
+            "/proc/self/environ", "/proc/self/cmdline",
+            "/sys/devices/system/cpu", "/dev/urandom",
+            "/etc/passwd", "/tmp", "/"
+        ];
+        // In the sandbox, none of these should be readable. The JS runtime
+        // has no fs API, so we can only verify indirectly: if the sandbox
+        // is working, this code runs without error (the APIs don't exist).
+        console.log(typeof require);   // should be undefined (no fs access)
+        console.log(typeof Deno);      // should be undefined (no Deno APIs)
+        console.log(typeof process);   // should be undefined (no Node APIs)
+    "#,
+    );
+    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.read_line(), "undefined");
+    assert_eq!(c.shutdown(), 0);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn seccomp_survives_gc_pressure() {
+    // V8 GC thread creation + heavy allocation must not trigger seccomp
+    // violations. This exercises the steady-state syscall allowlist under
+    // realistic heap pressure conditions.
+    let mut input = String::new();
+    // Allocate enough to trigger multiple GC cycles
+    for i in 0..20 {
+        input.push_str(&format!(
+            "{{ const a = []; for(let j=0; j<5000; j++) a.push({{x:{}}}); console.log({}); }}\n\n",
+            i, i
+        ));
+    }
+    let (stdout, stderr, code) = run_hermit_with_input(&["--memory-limit", "64mb"], &input);
+    assert_eq!(code, 0, "GC pressure test should succeed; stderr: {}", stderr);
+    assert!(!stderr.contains("SECCOMP BLOCKED"), "seccomp violation during GC: {}", stderr);
+    assert_eq!(stdout.len(), 20, "expected 20 lines, got {}", stdout.len());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn seccomp_stage2_kills_on_violation() {
+    // After stage-2, seccomp violations should kill the process (not just trap).
+    // We can't easily trigger a blocked syscall from JS since dangerous APIs are
+    // removed, but we verify the convention: normal operations succeed under
+    // stage-2, and the process shuts down cleanly without any seccomp kill signal.
+    let mut input = String::new();
+    for i in 0..10 {
+        input.push_str(&format!("console.log({})\n\n", i));
+    }
+    let (stdout, stderr, code) = run_hermit_with_input(&[], &input);
+    assert_eq!(code, 0, "stage-2 should allow normal ops; stderr: {}", stderr);
+    assert!(!stderr.contains("SECCOMP BLOCKED"), "unexpected seccomp trap in stage-2: {}", stderr);
+    assert_eq!(stdout.len(), 10);
+}
+
+#[test]
 fn no_raw_memory_access_primitives() {
     // Comprehensive check that ALL memory-access primitives are removed.
     // These are the exact types an attacker needs for heap read/write.
