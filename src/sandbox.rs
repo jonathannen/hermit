@@ -186,7 +186,22 @@ fn try_enter_mount_namespace() -> Result<(), Box<dyn std::error::Error>> {
     }
     let _ = fs::remove_dir("/old_root");
 
-    // 8. chdir to / in the new root
+    // 8. Remount root tmpfs read-only. Setup is complete — no more files or
+    // directories need to be created. This prevents any writes to the tmpfs
+    // even if an attacker bypasses the seccomp openat read-only filter.
+    // SAFETY: remount on "/" with MS_RDONLY only changes mount flags.
+    let ret = unsafe {
+        libc::mount(
+            none, root, none,
+            libc::MS_REMOUNT | libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC,
+            none as *const libc::c_void,
+        )
+    };
+    if ret != 0 {
+        return Err(format!("remount / read-only: {}", std::io::Error::last_os_error()).into());
+    }
+
+    // 9. chdir to / in the new root
     // SAFETY: chdir to a valid path.
     unsafe { libc::chdir(c"/".as_ptr()); }
 
