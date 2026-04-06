@@ -284,6 +284,8 @@ fn main() {
 /// Apply OS-level resource limits. Called after runtime init, before seccomp.
 /// In strict mode, setrlimit failures are fatal.
 fn apply_rlimits(mode: sandbox::SandboxMode, memory_limit: usize, timeout: Option<Duration>) {
+    // Suppress unused warnings on non-Unix/non-Linux where cfg blocks exclude usage.
+    let _ = (mode, memory_limit, timeout);
     #[cfg(unix)]
     {
         use libc::{rlimit, setrlimit, RLIMIT_FSIZE, RLIMIT_NOFILE};

@@ -1,6 +1,6 @@
 "use strict";
 
-(function(current) {
+(function (current) {
   const core = Deno.core;
   const log = core.ops.op_log;
 
@@ -96,8 +96,8 @@
   _freeze(poisonConstructor.prototype);
   _freeze(poisonConstructor);
 
-  const syncFunc = function() {};
-  const asyncFunc = async function() {};
+  const syncFunc = function () {};
+  const asyncFunc = async function () {};
   const genFunc = function* () {};
   const asyncGenFunc = async function* () {};
 
@@ -107,16 +107,24 @@
   const _asyncGenFuncProto = _getPrototypeOf(asyncGenFunc);
 
   _defineProperty(_syncFuncProto, "constructor", {
-    configurable: false, value: poisonConstructor, writable: false
+    configurable: false,
+    value: poisonConstructor,
+    writable: false,
   });
   _defineProperty(_asyncFuncProto, "constructor", {
-    configurable: false, value: poisonConstructor, writable: false
+    configurable: false,
+    value: poisonConstructor,
+    writable: false,
   });
   _defineProperty(_genFuncProto, "constructor", {
-    configurable: false, value: poisonConstructor, writable: false
+    configurable: false,
+    value: poisonConstructor,
+    writable: false,
   });
   _defineProperty(_asyncGenFuncProto, "constructor", {
-    configurable: false, value: poisonConstructor, writable: false
+    configurable: false,
+    value: poisonConstructor,
+    writable: false,
   });
 
   // Freeze function prototypes immediately after poisoning to prevent
@@ -129,19 +137,21 @@
   // Disable eval at JS level (belt-and-suspenders with V8 flag)
   _defineProperty(current, "eval", {
     configurable: false,
-    value: () => { throw new _Error("eval is disabled"); },
-    writable: false
+    value: () => {
+      throw new _Error("eval is disabled");
+    },
+    writable: false,
   });
 
   // Freeze prototypes reachable through literals or V8 internal throws but not
   // through the restored allowlist. These survive deletion because literals and
   // catch blocks bypass globalThis.
   // Must happen before deny-by-default deletion so the constructors are accessible.
-  _freeze(RegExp.prototype);                                         // /foo/.constructor.prototype
+  _freeze(RegExp.prototype); // /foo/.constructor.prototype
   _freeze(RegExp);
-  _freeze(Symbol.prototype);                                         // recoverable via getOwnPropertySymbols
+  _freeze(Symbol.prototype); // recoverable via getOwnPropertySymbols
   _freeze(Symbol);
-  _freeze(BigInt.prototype);                                         // 42n literal
+  _freeze(BigInt.prototype); // 42n literal
   _freeze(BigInt);
 
   // Error subtypes not in the restore list but recoverable at runtime.
@@ -155,8 +165,10 @@
   deepFreeze(SyntaxError.prototype);
   deepFreeze(URIError.prototype);
   deepFreeze(EvalError.prototype);
-  if (typeof AggregateError !== "undefined") deepFreeze(AggregateError.prototype);
-  if (typeof SuppressedError !== "undefined") deepFreeze(SuppressedError.prototype);
+  if (typeof AggregateError !== "undefined")
+    deepFreeze(AggregateError.prototype);
+  if (typeof SuppressedError !== "undefined")
+    deepFreeze(SuppressedError.prototype);
 
   // Freeze iterator prototypes (reachable via [].values(), new Map().values(), etc.)
   const _arrIter = [].values();
@@ -167,7 +179,7 @@
   _freeze(_getPrototypeOf(new _Map().values()));
   _freeze(_getPrototypeOf(new _Set().values()));
   _freeze(_getPrototypeOf(""[Symbol.iterator]()));
-  deepFreeze(_getPrototypeOf("".matchAll(/(?:)/g)));              // %RegExpStringIteratorPrototype%
+  deepFreeze(_getPrototypeOf("".matchAll(/(?:)/g))); // %RegExpStringIteratorPrototype%
 
   // Freeze generator, async generator, and async function prototypes.
   // These are not reachable from globalThis (created via literal syntax only),
@@ -181,21 +193,25 @@
   // per-function .prototype objects.
   //
   // Uses genFunc/asyncGenFunc/asyncFunc already defined above for poisoning.
-  deepFreeze(_getPrototypeOf(genFunc));                          // GeneratorFunction.prototype
-  deepFreeze(_getPrototypeOf(genFunc.prototype));                // Generator.prototype (shared)
-  deepFreeze(_getPrototypeOf(asyncGenFunc));                     // AsyncGeneratorFunction.prototype
-  deepFreeze(_getPrototypeOf(asyncGenFunc.prototype));           // AsyncGenerator.prototype (shared)
-  deepFreeze(_getPrototypeOf(asyncFunc));                        // AsyncFunction.prototype
+  deepFreeze(_getPrototypeOf(genFunc)); // GeneratorFunction.prototype
+  deepFreeze(_getPrototypeOf(genFunc.prototype)); // Generator.prototype (shared)
+  deepFreeze(_getPrototypeOf(asyncGenFunc)); // AsyncGeneratorFunction.prototype
+  deepFreeze(_getPrototypeOf(asyncGenFunc.prototype)); // AsyncGenerator.prototype (shared)
+  deepFreeze(_getPrototypeOf(asyncFunc)); // AsyncFunction.prototype
 
   // Deny-by-default: delete ALL own properties (string-keyed and symbol-keyed,
   // enumerable and non-enumerable) from globalThis, then restore only the safe
   // allowlist below. This ensures new V8 globals are blocked automatically.
   for (const key of _getOwnPropertyNames(current)) {
     if (key === "globalThis") continue;
-    try { delete current[key]; } catch(_) {}
+    try {
+      delete current[key];
+    } catch (_) {}
   }
   for (const sym of _getOwnPropertySymbols(current)) {
-    try { delete current[sym]; } catch(_) {}
+    try {
+      delete current[sym];
+    } catch (_) {}
   }
 
   // Restore safe builtins
@@ -214,10 +230,12 @@
 
   // Install console.log (the only output primitive)
   const console = _freeze({
-    log: (...args) => log(args.map(safeString).join(" "))
+    log: (...args) => log(args.map(safeString).join(" ")),
   });
   _defineProperty(current, "console", {
-    value: console, writable: false, configurable: false
+    value: console,
+    writable: false,
+    configurable: false,
   });
 
   // Transitively deep-freeze the entire reachable object graph from globalThis.
