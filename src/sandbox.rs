@@ -228,8 +228,10 @@ fn drop_capabilities() {
     // SAFETY: prctl with PR_CAP_AMBIENT only modifies process capability sets.
     unsafe { libc::prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0); }
 
-    // Drop each capability from the bounding set (0..40 covers all current caps)
-    for cap in 0..41i32 {
+    // Drop each capability from the bounding set.
+    // Use 64 as upper bound to cover future kernel additions (prctl returns
+    // EINVAL for invalid cap numbers, which we ignore).
+    for cap in 0..64i32 {
         // SAFETY: prctl with PR_CAPBSET_DROP drops a single capability.
         // Returns EINVAL for invalid cap numbers, which we ignore.
         unsafe { libc::prctl(PR_CAPBSET_DROP, cap, 0, 0, 0); }

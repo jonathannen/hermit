@@ -565,23 +565,17 @@ fn allow_safe_futex(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
     const FUTEX_CMD_MASK: u64 = 0x7f;
     const FUTEX_WAIT: u64 = 0;
     const FUTEX_WAKE: u64 = 1;
-    const FUTEX_REQUEUE: u64 = 3;
-    const FUTEX_CMP_REQUEUE: u64 = 4;
     const FUTEX_WAKE_OP: u64 = 5;
     const FUTEX_WAIT_BITSET: u64 = 9;
     const FUTEX_WAKE_BITSET: u64 = 10;
 
+    // FUTEX_REQUEUE (3) and FUTEX_CMP_REQUEUE (4) removed — historically
+    // tied to kernel CVEs (e.g. CVE-2014-3153) and not needed by V8/tokio.
     let futex_rules = vec![
         SeccompRule::new(vec![SeccompCondition::new(1, SeccompCmpArgLen::Dword, SeccompCmpOp::MaskedEq(FUTEX_CMD_MASK), FUTEX_WAIT)
             .expect("valid")])
         .expect("valid"),
         SeccompRule::new(vec![SeccompCondition::new(1, SeccompCmpArgLen::Dword, SeccompCmpOp::MaskedEq(FUTEX_CMD_MASK), FUTEX_WAKE)
-            .expect("valid")])
-        .expect("valid"),
-        SeccompRule::new(vec![SeccompCondition::new(1, SeccompCmpArgLen::Dword, SeccompCmpOp::MaskedEq(FUTEX_CMD_MASK), FUTEX_REQUEUE)
-            .expect("valid")])
-        .expect("valid"),
-        SeccompRule::new(vec![SeccompCondition::new(1, SeccompCmpArgLen::Dword, SeccompCmpOp::MaskedEq(FUTEX_CMD_MASK), FUTEX_CMP_REQUEUE)
             .expect("valid")])
         .expect("valid"),
         SeccompRule::new(vec![SeccompCondition::new(1, SeccompCmpArgLen::Dword, SeccompCmpOp::MaskedEq(FUTEX_CMD_MASK), FUTEX_WAKE_OP)
