@@ -1,4 +1,4 @@
-use deno_core::{JsRuntime, RuntimeOptions, extension};
+use deno_core::{ExtensionFileSource, JsRuntime, RuntimeOptions, extension};
 
 use crate::ops::op_log;
 
@@ -15,8 +15,16 @@ extension!(
     hermit,
     ops = [op_log],
     esm_entry_point = "ext:hermit/runtime.js",
-    esm = [dir "src", "runtime.js"],
 );
+
+fn hermit_extension() -> deno_core::Extension {
+    let mut extension = hermit::init();
+    extension.esm_files.to_mut().push(ExtensionFileSource::new(
+        "ext:hermit/runtime.js",
+        deno_core::ascii_str_include!("runtime.js"),
+    ));
+    extension
+}
 
 extern "C" fn near_heap_limit_callback(
     _data: *mut std::ffi::c_void,
@@ -53,7 +61,7 @@ pub fn create_runtime(
         .allow_atomics_wait(false);
 
     let mut runtime = JsRuntime::new(RuntimeOptions {
-        extensions: vec![hermit::init()],
+        extensions: vec![hermit_extension()],
         create_params: Some(create_params),
         ..Default::default()
     });

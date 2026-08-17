@@ -159,7 +159,7 @@ pub fn install(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>> {
     // ioctl: BLOCKED entirely — no terminal or device ops needed post-init
     // fstat: BLOCKED — V8 init is done before seccomp; no runtime need expected
     allow(&mut rules, libc::SYS_close);
-    // fcntl: BLOCKED entirely — fd flags are set during init
+    allow_fcntl_getfd(&mut rules); // V8 checks descriptor state during shutdown
     allow_openat_readonly(&mut rules); // openat restricted to read-only
 
     // Memory management (V8 JIT requires these)
@@ -308,6 +308,7 @@ pub fn install_stage2(allow_jit: bool) -> Result<(), Box<dyn std::error::Error>>
     allow(&mut rules, libc::SYS_read);    // stdin input
     allow(&mut rules, libc::SYS_write);   // console.log output
     allow(&mut rules, libc::SYS_close);   // thread cleanup
+    allow_fcntl_getfd(&mut rules);        // V8 checks descriptor state during shutdown
     allow_openat_readonly(&mut rules);    // V8 GC threads attempt to open /proc files
                                            // during collection (fails harmlessly in empty
                                            // namespace, but the syscall must be allowed)
@@ -395,6 +396,23 @@ fn allow(rules: &mut BTreeMap<i64, Vec<SeccompRule>>, syscall: i64) {
     rules.insert(syscall, vec![]);
 }
 
+/// Allow querying a descriptor's close-on-exec flag, without permitting any
+/// descriptor duplication or mutation commands.
+#[cfg(target_os = "linux")]
+fn allow_fcntl_getfd(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
+    let getfd = SeccompRule::new(vec![
+        SeccompCondition::new(
+            1,
+            SeccompCmpArgLen::Dword,
+            SeccompCmpOp::Eq,
+            libc::F_GETFD as u64,
+        )
+        .expect("valid"),
+    ])
+    .expect("valid");
+    rules.insert(libc::SYS_fcntl, vec![getfd]);
+}
+
 /// Allow only safe madvise flags (block MADV_DONTDUMP, MADV_HUGEPAGE, etc.)
 #[cfg(target_os = "linux")]
 fn allow_safe_madvise(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
@@ -415,6 +433,7 @@ fn allow_safe_madvise(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
     const MADV_DONTNEED: u64 = 4;
     const MADV_FREE: u64 = 8;
     const MADV_DONTFORK: u64 = 10;
+    const MADV_DODUMP: u64 = 17;
 
     let madvise_rules = vec![
         SeccompRule::new(vec![SeccompCondition::new(2, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, MADV_NORMAL)
@@ -427,6 +446,11 @@ fn allow_safe_madvise(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) {
             .expect("valid")])
         .expect("valid"),
         SeccompRule::new(vec![SeccompCondition::new(2, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, MADV_DONTFORK)
+            .expect("valid")])
+        .expect("valid"),
+        // V8 restores the default dump behavior after configuring a region.
+        // This only removes MADV_DONTDUMP and cannot conceal memory.
+        SeccompRule::new(vec![SeccompCondition::new(2, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, MADV_DODUMP)
             .expect("valid")])
         .expect("valid"),
     ];
